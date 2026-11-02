@@ -38,7 +38,7 @@
         <button data-osc="step" data-arg="1" title="step forward one frame">⏩</button>
         <span class="sep"></span>
       </span>
-      <button id="scan-btn" data-osc="trigger" title="manual scan (the pedal): capture every settled object NOW, skipping its settle dwell, and emit at once — objects still in motion are left alone">⦿</button>
+      <button id="scan-btn" data-osc="trigger" title="manual scan (the pedal): read the table NOW — finish pending settles without their dwell AND re-bake every quiet resting object from the live frame; anything in motion, covered, or under a hand is left alone. In commit_mode=manual this is the only shutter">⦿</button>
       <span class="sep"></span>
       <button data-view="input" title="input view — the raw camera frame (+ crop/mask calibration guides)">⛶</button>
       <button data-view="debug" title="debug view — the object-foreground mask">◧</button>

@@ -54,11 +54,11 @@ class Classify:
                   doc="Seconds off-footprint must persist for RESTING to become MOVED"),
         ParamSpec("hold_max_seconds", float, _HOLD_MAX, lo=0, attr="_hold_max",
                   doc="Max seconds a RESTING object stays pinned under a moving mass before the hold releases"),
-        ParamSpec("commit_mode", str, "partial", enum=("partial", "global"), attr="_commit_mode",
+        ParamSpec("commit_mode", str, "partial", enum=("partial", "global", "manual"), attr="_commit_mode",
                   apply=lambda self, v: (setattr(self, "_commit_mode", str(v).lower()),
                                          setattr(self, "_quiet_since", None),
                                          setattr(self, "_committed", False)),
-                  doc="WHEN the registry updates. 'partial' (default) = per-object settle: each object commits on its OWN settle_seconds dwell, so a quiet object updates while another is still handled - the partial-update paradigm. 'global' = the whole TABLE must go quiet for global_quiet_seconds, then EVERY settled object commits in one tick and nothing commits in between: the arrangement speaks as one event (the automatic form of the /rmt/trigger pedal)"),
+                  doc="WHEN the registry updates. 'partial' (default) = per-object settle: each object commits on its OWN settle_seconds dwell, so a quiet object updates while another is still handled - the partial-update paradigm. 'global' = the whole TABLE must go quiet for global_quiet_seconds, then EVERY settled object commits in one tick and nothing commits in between: the arrangement speaks as one event (the automatic form of the /rmt/trigger pedal). 'manual' = nothing commits on its own: settling objects hold until a /rmt/trigger (pedal / OSC / webgui scan) commits the scene - the explicit-shutter form"),
         ParamSpec("global_quiet_seconds", float, _GLOBAL_QUIET, lo=0.0, attr="_quiet_secs",
                   doc="[commit_mode=global] how long the whole table must stay idle before the one global commit fires. Fires ONCE per quiet period; re-arms when the table moves again"),
         ParamSpec("global_quiet_frac", float, _GLOBAL_FRAC, lo=0.0, hi=1.0, attr="_quiet_frac",
@@ -85,8 +85,10 @@ class Classify:
         return self._obs.k if self._obs is not None else self._k_cold
 
     def __call__(self, ctx: Any, scene: Any) -> None:
-        # /rmt/trigger (pedal): for THIS tick capture every settling object without its dwell + confirm it,
-        # so the operator's "read it now" lands in the outputs immediately. Taken once per fire.
+        # /rmt/trigger (pedal): for THIS tick, read the table as it stands — capture every settling object
+        # without its dwell, re-bake every quiet RESTING object from the live frame (flushing sub-k drift),
+        # and confirm fresh mints, so the operator's "read it now" lands in the outputs immediately.
+        # Taken once per fire.
         forced = bool(self._scan is not None and self._scan.take())
         if forced:
             self._log.info("[classify] manual scan - capturing settled objects now")
@@ -166,11 +168,12 @@ class Classify:
                     self._capture(ctx, scene, obj, obs)
                 elif obj.settle_since is None:
                     scene.set(obj.id, "settle_since", ctx.ts)
-                elif ctx.ts - obj.settle_since >= self._settle and self._commit_mode != "global":
+                elif ctx.ts - obj.settle_since >= self._settle and self._commit_mode == "partial":
                     self._capture(ctx, scene, obj, obs)   # PARTIAL mode: each object commits on its own
-                    #   dwell. In GLOBAL mode nothing commits here — the object stays SETTLING, holding
-                    #   its settle_since, until the whole table goes idle and the commit above fires. The
-                    #   timer keeps running so switching the knob back to partial commits it immediately.
+                    #   dwell. In GLOBAL/MANUAL mode nothing commits here — the object stays SETTLING,
+                    #   holding its settle_since, until the whole table goes idle (global) or the pedal
+                    #   fires (manual). The timer keeps running so switching the knob back to partial
+                    #   commits it immediately.
         elif st is Status.RESTING:
             # a MOVING mass over the footprint (an arm crossing / grabbing) HOLDS the object pinned so a
             # transient occlusion doesn't flicker RESTING→HIDDEN→…→RESTING (a re-capture wobble). BOUNDED
@@ -181,7 +184,13 @@ class Classify:
                 scene.set(obj.id, "under_motion_since", None)        # occlusion cleared → reset the window
             holding = obs.under_motion and (obj.under_motion_since is None
                                             or ctx.ts - obj.under_motion_since <= self._hold_max)
-            if holding:                                 # HOLD pinned (its residual/missing are the mass's)
+            if (forced and stable and not covered and not off_footprint
+                    and not obs.under_motion and obs.mask is not None):
+                # manual scan = "read the table NOW": re-bake the quiet object from the live mask,
+                # flushing the sub-k drift (nudges, light creep) the change-gate deliberately holds.
+                # The capture invariant stands — moving, covered, or under-a-hand keeps the old footprint.
+                self._capture(ctx, scene, obj, obs)
+            elif holding:                               # HOLD pinned (its residual/missing are the mass's)
                 if obj.off_since is not None:
                     scene.set(obj.id, "off_since", None)
             elif rest_hidden:

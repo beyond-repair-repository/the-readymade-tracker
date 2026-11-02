@@ -185,9 +185,11 @@ class ControlRouter:
             pp.clear_flatfield()
 
     def _trigger(self, args: tuple) -> None:
-        """``trigger`` — the manual scan (a pedal / OSC client): capture every settling object on the next
-        pipeline tick without waiting out its settle dwell, and confirm it so the outputs emit at once.
-        No-op (warned) when no ScanTrigger is wired.
+        """``trigger`` — the manual scan (a pedal / OSC client): read the table NOW. On the next pipeline
+        tick every settling object is captured without waiting out its settle dwell, every quiet RESTING
+        object is re-baked from the live frame (flushing sub-threshold drift), and fresh mints are
+        confirmed so the outputs emit at once. In ``[classify] commit_mode = manual`` this is the ONLY
+        way the registry commits. No-op (warned) when no ScanTrigger is wired.
 
         When PAUSED, the source produces no frame, so the scan would never be consumed and the outputs
         would emit nothing. So a paused trigger ALSO asks the transport to re-emit the frozen frame once —

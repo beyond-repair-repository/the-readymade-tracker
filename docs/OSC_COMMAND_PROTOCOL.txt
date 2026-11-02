@@ -319,22 +319,29 @@ originates from the browser, a hardware controller, or a sequencer.
   Args    : none (any args are ignored)
   Reply   : none (a control verb)
 
-  Forces an evaluation NOW and emits it: on the next pipeline tick every SETTLING
-  object is captured WITHOUT waiting out its [classify] settle_seconds dwell, and
-  is confirmed at once so it goes straight to the outputs (OSC / TUIO2 / views)
-  rather than waiting out [classify] confirm_seconds.
+  Reads the table as it stands NOW and emits it. On the next pipeline tick:
+    * every SETTLING object is captured WITHOUT waiting out its [classify]
+      settle_seconds dwell, and is confirmed at once so it goes straight to the
+      outputs (OSC / TUIO2 / views) rather than waiting out confirm_seconds;
+    * every quiet RESTING object is RE-BAKED from the live frame — its footprint
+      re-captured from the current mask — flushing the sub-threshold drift
+      (small nudges, lighting creep) the change-gate deliberately holds. The
+      re-bake fires no pose re-fit (no status edge), so θ stays put: a sub-k
+      drift is not a rotation.
 
   This is the operator asserting "the arrangement is set — read it", instead of
   letting each object's own timer decide. The foot pedal exists: the [mcu]
   serial control input turns a board's "T" line into exactly this verb, posting
-  to the same CommandInbox. One press commits
-  the table's current arrangement.
+  to the same CommandInbox. One press commits the table's current arrangement.
+  With [classify] commit_mode = manual, this verb is the ONLY way the registry
+  commits — the explicit-shutter mode.
 
   What it does NOT do: it bypasses the DWELL only, never the stability test. An
   object still genuinely in motion (mask changing frame-over-frame) is NOT
-  captured — that would bake a smeared or hand-occluded footprint. So a trigger
-  during manipulation is safe: it commits whatever is genuinely at rest and
-  ignores what is not.
+  captured, and a resting object that is covered, off its footprint, or under a
+  moving hand keeps its old footprint — capturing any of those would bake a
+  smeared or hand-occluded footprint. So a trigger during manipulation is safe:
+  it commits whatever is genuinely at rest and ignores what is not.
 
   Semantics: fire-and-forget and idempotent-until-consumed. Two presses before
   the next tick are ONE scan. Firing it with no scan trigger wired (a bare

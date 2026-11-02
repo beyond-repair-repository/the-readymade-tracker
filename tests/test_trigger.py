@@ -1,11 +1,16 @@
-"""``/rmt/trigger`` — the manual scan (a pedal / OSC client): capture every SETTLING object on the next
-tick WITHOUT waiting out its ``settle_seconds`` dwell, and confirm it so the outputs emit at once.
+"""``/rmt/trigger`` — the manual scan (a pedal / OSC client): read the table as it stands NOW. On the
+next tick every SETTLING object is captured WITHOUT waiting out its ``settle_seconds`` dwell (and
+confirmed so the outputs emit at once), and every quiet RESTING object is RE-BAKED from the live mask,
+flushing the sub-threshold drift the change-gate deliberately holds.
 
 The operator asserts "the arrangement is set — read it" instead of letting each object's timer decide.
-It bypasses the DWELL only, never the stability test: an object still genuinely in motion is not
-captured (that would bake a smeared/occluded footprint)."""
+It bypasses the DWELL only, never the stability test: an object in motion, covered, or under a moving
+hand is not touched (that would bake a smeared/occluded footprint). With ``commit_mode = manual``,
+this verb is the ONLY way the registry commits — the explicit shutter."""
 
 from types import SimpleNamespace
+
+import numpy as np
 
 from lib.classify import Classify
 from lib.control import ControlRouter, ScanTrigger
@@ -161,3 +166,99 @@ def test_trigger_confirms_immediately_so_outputs_emit():
     with s.writing("classify"):
         cls._latch_confirmed(SimpleNamespace(ts=0.1), s, s.get(oid), True)
     assert s.get(oid).confirmed is True                  # manual scan → confirmed at once
+
+
+# --------------------------------------------------------------------------- #
+# the refresh: a quiet RESTING object is re-baked from the live mask
+# --------------------------------------------------------------------------- #
+
+def _real_obs(mask, *, xor_prev=0.0, residual=0.0, missing=0.0, under_motion=False):
+    """An observation carrying a REAL mask (for the real ``_capture``), centroid included."""
+    ys, xs = np.nonzero(mask)
+    centroid = (float(xs.mean()), float(ys.mean())) if len(xs) else (0.0, 0.0)
+    return SimpleNamespace(xor_prev=xor_prev, area=float(len(xs)), residual=residual,
+                           missing=missing, under_motion=under_motion,
+                           mask=mask, centroid=centroid)
+
+
+def _rested_object(scene, cls, trigger):
+    """Mint, settle, and capture an object via a first trigger → RESTING with a 100 px² footprint."""
+    m1 = np.zeros((40, 40), np.uint8)
+    m1[10:20, 10:20] = 255                                   # area 100 → thr = k*100 = 5 px
+    oid = _settling_object(scene, obs=_real_obs(m1))
+    trigger.fire()
+    with scene.writing("classify"):
+        cls(SimpleNamespace(ts=1.0), scene)
+    assert scene.get(oid).status is Status.RESTING
+    assert scene.get(oid).footprint_area == 100
+    return oid, m1
+
+
+def test_trigger_rebakes_a_quiet_resting_object():
+    s = Scene()
+    t = ScanTrigger()
+    cls = Classify(_cfg(settle_seconds=999.0, k=0.05), scan_trigger=t)
+    oid, m1 = _rested_object(s, cls, t)
+
+    # sub-k drift: 3 extra px against thr 5 — the change-gate holds this forever by design
+    m2 = m1.copy()
+    m2[10:13, 20] = 255                                      # area 103, residual 3 < thr
+    s.begin_tick(3, ts=2.0)
+    with s.writing("observe"):
+        s.set(oid, "observation", _real_obs(m2, residual=3.0))
+    s.begin_tick(4, ts=2.1)
+
+    with s.writing("classify"):
+        cls(SimpleNamespace(ts=2.1), s)                      # no trigger → the drift stays held
+    assert s.get(oid).footprint_area == 100
+
+    t.fire()
+    with s.writing("classify"):
+        cls(SimpleNamespace(ts=2.2), s)                      # stomp → re-baked from the live mask
+    assert s.get(oid).footprint_area == 103
+    assert s.get(oid).status is Status.RESTING               # a re-bake is not a transition
+
+
+def test_trigger_leaves_a_resting_object_under_motion_alone():
+    s = Scene()
+    t = ScanTrigger()
+    cls = Classify(_cfg(settle_seconds=999.0, k=0.05), scan_trigger=t)
+    oid, m1 = _rested_object(s, cls, t)
+
+    m2 = m1.copy()
+    m2[10:13, 20] = 255
+    s.begin_tick(3, ts=2.0)
+    with s.writing("observe"):                               # a hand over the spot: motion on the footprint
+        s.set(oid, "observation", _real_obs(m2, residual=3.0, under_motion=True))
+    s.begin_tick(4, ts=2.1)
+
+    t.fire()
+    with s.writing("classify"):
+        cls(SimpleNamespace(ts=2.1), s)
+    assert s.get(oid).footprint_area == 100                  # never bake under a moving hand
+    assert s.get(oid).status is Status.RESTING
+
+
+# --------------------------------------------------------------------------- #
+# commit_mode = manual: the trigger is the ONLY shutter
+# --------------------------------------------------------------------------- #
+
+def test_commit_mode_manual_commits_only_on_trigger(monkeypatch):
+    s = Scene()
+    t = ScanTrigger()
+    cls = Classify(_cfg(settle_seconds=0.0, commit_mode="manual", k=0.05), scan_trigger=t)
+    oid = _settling_object(s, obs=_obs(xor_prev=0.0))
+    got = []
+    monkeypatch.setattr(cls, "_capture", lambda ctx, scene, obj, obs: got.append(obj.id))
+
+    with s.writing("classify"):
+        cls(SimpleNamespace(ts=1.0, motion_frac=0.0), s)     # starts the (irrelevant) dwell
+    with s.writing("classify"):
+        cls(SimpleNamespace(ts=99.0, motion_frac=0.0), s)    # dwell long past AND table dead quiet
+    assert got == []                                         # …still held: manual never auto-commits
+    assert s.get(oid).status is Status.SETTLING
+
+    t.fire()
+    with s.writing("classify"):
+        cls(SimpleNamespace(ts=99.1, motion_frac=0.0), s)
+    assert got == [oid]                                      # the pedal is the shutter
