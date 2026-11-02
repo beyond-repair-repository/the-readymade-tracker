@@ -56,7 +56,7 @@ A per-section `enabled` switch exists for every optional stage/plugin (reid, fea
 
 ## `[preprocess]` — geometric + photometric conditioning
 **Why:** the pipeline wants a stable, table-aligned, evenly-lit gray frame; everything correctable once belongs before perception.
-**What:** lens undistortion, mirroring, rectangular crop to the table ROI, a circular mask, and dark-frame (flatfield) subtraction, in one fixed-order pass; the master switch off reduces it to BGR→gray.
+**What:** lens undistortion, mirroring, rectangular crop to the table ROI, a circular mask, dark-frame (flatfield) subtraction, and a temporal EMA noise low-pass on gray, in one fixed-order pass; the master switch off reduces it to BGR→gray.
 **Impact:** defines the coordinate frame every knob's pixels live in (crop changes frame size — restart) and removes fixed-pattern light/vignette the thresholds would otherwise misread as objects.
 **How:** cv2 remap/flip/slice/mask/subtract chained on the input thread, cached artifacts (lens YAML, dark frame) loaded once.
 **Limits:** all corrections are static calibrations — nothing adapts at runtime; test clips ship pre-conditioned so `preprocess=false` replays them correctly.
@@ -67,6 +67,7 @@ A per-section `enabled` switch exists for every optional stage/plugin (reid, fea
 - **`crop_enabled` / `crop_top_x` / `crop_top_y` / `crop_width` / `crop_height`** (bool/int, restart) — **Why:** the sensor sees more than the table. **What:** rectangular ROI cut (0 width/height = to the edge). **Impact:** defines the 1024² working frame; off-table motion vanishes from every stage. **How:** an array slice on the input thread. **Limits:** changes frame size → restart; all px-denominated knobs implicitly assume the cropped frame.
 - **`mask_enabled` / `mask_cx` / `mask_cy` / `mask_radius`** (bool/int, live) — **Why:** round tables have corners the crop can't remove. **What:** zeroes gray outside a circle. **Impact:** kills border intrusions (knees, cables) at the source; pairs with observe's rim gate. **How:** a multiply by a cached circle mask. **Limits:** the effect is invisible in the BGR views (the webgui draws the circle as an overlay instead).
 - **`flatfield_enabled` / `flatfield_path`** (bool/str, live) — **Why:** vignetting and hot pixels are fixed-pattern noise no global threshold can absorb. **What:** subtracts a captured dark/empty-table frame. **Impact:** evens the field so ONE `fg_threshold` works everywhere. **How:** per-pixel subtraction of the stored image/`.npy`. **Limits:** stale dark frames (moved lamp) reintroduce bias — recapture after any light change.
+- **`smooth_alpha`** (float 0–1, default 0 = off, live) — **Why:** per-pixel sensor noise flickers the thresholds and can keep objects from ever settling. **What:** temporal EMA low-pass on the gray frame; the value is the weight of the NEW frame (lower = stronger smoothing). **Impact:** steadies the quiet test on noisy sensors; complements observe's `blur` (spatial, detection-path-only) with a temporal filter feeding every gray consumer. **How:** rolling `cv2.accumulateWeighted` into one float32 accumulator on the input thread — no frame window, no startup wait, zero pipeline cost. **Limits:** ~1/alpha frames of motion lag (a brief ghost trail on fast moves); 0 and 1 are byte-identical passthrough; BGR (reid's colour patches) stays raw.
 
 ---
 

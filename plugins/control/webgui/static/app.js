@@ -24,7 +24,7 @@
   // a section can split its params into expandable sub-groups: [groupLabel, [keys]]. '' = ungrouped (top).
   const SUBGROUPS = {
     preprocess: [
-      ['', ['preprocess']],                                                        // master switch, ungrouped
+      ['', ['preprocess', 'smooth_alpha']],                                        // master switch + EMA, ungrouped
       ['FLIP', ['flip']],
       ['CROP', ['crop_enabled', 'crop_top_x', 'crop_top_y', 'crop_width', 'crop_height']],
       ['MASK', ['mask_enabled', 'mask_cx', 'mask_cy', 'mask_radius']],

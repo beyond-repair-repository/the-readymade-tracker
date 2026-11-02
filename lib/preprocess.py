@@ -76,6 +76,7 @@ class PreprocessConfig:
         ParamSpec("mask_cx", int, None, lo=0, hot=True, bind=False, apply=_pp_apply("mask_cx"), doc="Circular mask center X in raw pixels"),
         ParamSpec("mask_cy", int, None, lo=0, hot=True, bind=False, apply=_pp_apply("mask_cy"), doc="Circular mask center Y in raw pixels"),
         ParamSpec("mask_radius", int, None, lo=0, hot=True, bind=False, apply=_pp_apply("mask_radius"), doc="Circular mask radius in pixels (0 disables the mask)"),
+        ParamSpec("smooth_alpha", float, None, lo=0.0, hi=1.0, hot=True, bind=False, apply=_pp_apply("smooth_alpha"), doc="Temporal EMA on GRAY (cv2.accumulateWeighted): weight of the NEW frame — 0 (or 1) = off, lower = stronger sensor-noise smoothing at the cost of ~1/alpha frames of motion lag. Runs on the input thread; costs the pipeline nothing"),
         ParamSpec("flatfield_enabled", bool, None, hot=True, bind=False, apply=_pp_apply("flatfield_enabled"), doc="Enable flatfield dark-frame subtraction"),
         ParamSpec("flatfield_path", str, None, hot=True, bind=False, apply=_pp_apply("flatfield_path"), doc="Path to flatfield dark-frame image or .npy to subtract"),
     )
@@ -103,6 +104,8 @@ class PreprocessConfig:
     mask_cx: int = 0
     mask_cy: int = 0
     mask_radius: int = 0
+
+    smooth_alpha: float = 0.0   # temporal EMA weight of the NEW gray frame; 0 (or 1) = off
 
     flatfield_enabled: bool = False
     flatfield_path: str = ""
@@ -132,6 +135,7 @@ class PreprocessConfig:
             mask_cx=int(m.get("mask_cx", 0)),
             mask_cy=int(m.get("mask_cy", 0)),
             mask_radius=int(m.get("mask_radius", 0)),
+            smooth_alpha=float(m.get("smooth_alpha", 0.0)),
             flatfield_enabled=bool(m.get("flatfield_enabled", False)),
             flatfield_path=path(m.get("flatfield_path", "")),
         )
@@ -215,6 +219,7 @@ class Preprocess:
         self._crop_rect: tuple[int, int, int, int] | None = None
         self._input_full: np.ndarray | None = None      # the flipped, PRE-crop frame — the 'input'/raw view
         self._raw_hw: tuple[int, int] | None = None     # (h, w) of the incoming frame
+        self._ema: np.ndarray | None = None             # float32 rolling EMA of gray (smooth_alpha)
         self._flatfield_ready: np.ndarray | None = None
         self._mask_circle: np.ndarray | None = None
         self._ff_cap: dict | None = None                # in-progress flatfield capture (average N frames)
@@ -311,6 +316,7 @@ class Preprocess:
             self._accumulate_flatfield(bgr)
         bgr = self._flatfield(bgr)
         gray = self._gray(bgr)
+        gray = self._smooth(gray)
         gray = self._mask(gray, bgr.shape)
         return bgr, gray
 
@@ -395,6 +401,21 @@ class Preprocess:
 
     def _gray(self, bgr: np.ndarray) -> np.ndarray:
         return cv2.cvtColor(bgr, cv2.COLOR_BGR2GRAY)
+
+    def _smooth(self, gray: np.ndarray) -> np.ndarray:
+        """Temporal EMA low-pass on gray (``smooth_alpha`` = weight of the NEW frame): knocks down
+        per-pixel sensor noise that keeps objects from settling, at the cost of ~1/alpha frames of
+        motion lag. Rolling ``cv2.accumulateWeighted`` into one float32 accumulator — no frame window,
+        no wait; runs on the input thread. Off (alpha 0 or 1) it is a pure passthrough, byte-identical."""
+        a = float(self.cfg.smooth_alpha or 0.0)
+        if a <= 0.0 or a >= 1.0:
+            self._ema = None
+            return gray
+        if self._ema is None or self._ema.shape != gray.shape:
+            self._ema = gray.astype(np.float32)        # seed: first frame passes through
+            return gray
+        cv2.accumulateWeighted(gray, self._ema, a)
+        return cv2.convertScaleAbs(self._ema)
 
     def _mask(self, gray: np.ndarray, bgr_shape: tuple[int, ...]) -> np.ndarray:
         c = self.cfg
