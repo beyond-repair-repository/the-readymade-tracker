@@ -1,0 +1,64 @@
+==============================================================================
+TOOLS — the utilities shipped with this distribution
+Tracker v0.32.88.
+==============================================================================
+
+Three things ship alongside the tracker: the wire inspector, the camera
+calibration tool, and the benchmark suite. Everything runs in the one tracker
+venv (numpy + OpenCV); the two exceptions are named where they appear. Ground
+truth files are MOTChallenge-format text next to each clip as "<video>.MOT".
+
+(The development repository carries further research tooling — the crop-dataset
+builder, the re-identification descriptor study, MOT scoring/latency analyzers,
+and the ground-truth editor that authored the shipped .MOT files. None of it is
+needed to run the tracker or to reproduce the benchmark.)
+
+
+==============================================================================
+1. tools/tuio2_monitor.py  —  the wire inspector
+==============================================================================
+
+  Standalone TUIO 2.0 receiver + visualizer — binds a UDP port, decodes the
+  bundles, and draws each object's id, position, orientation, and contour
+  outline. Tracker-agnostic (speaks only OSC/TUIO); the independent check that
+  the wire carries what the tracker claims to send. benchmarks/run.py starts it
+  as the real client behind the latency numbers.
+
+    venv/bin/python tools/tuio2_monitor.py            # binds 0.0.0.0:3333
+    venv/bin/python tools/tuio2_monitor.py --text     # headless print, no window
+    venv/bin/python tools/tuio2_monitor.py --record cap.jsonl
+    venv/bin/python tools/tuio2_monitor.py --record-osc          # RAW replayable tape
+    venv/bin/python tools/tuio2_monitor.py --replay osc_tuio2_<ts>.bin
+
+  --record-osc writes every raw datagram (both the tuio2 and the oscout socket,
+  source-tagged) to a tape; --replay feeds a tape back at its recorded pacing
+  with no sockets bound — a wire session becomes a repeatable fixture.
+  --show-clusters binds a second socket for the tracker's own [oscout] stream
+  (default port 3400) and strokes each /rmt/cluster circle.
+
+
+==============================================================================
+2. tools/calibrate_camera.py  —  camera + preprocess calibration (GUI)
+==============================================================================
+
+  Interactive camera and preprocess calibration, companion to the camera input
+  backend. Needs one extra package: `venv/bin/pip install dearpygui`.
+  A GUI with a live video texture and a tabbed HUD:
+    * Hardware        — resolution picker + UVC camera controls (brightness /
+                        contrast / saturation / exposure / gamma / gain / white
+                        balance) applied live through the same shim the tracker
+                        uses.
+    * Processing      — the [preprocess] stage previewed with the real preprocess
+                        code: lens undistort, crop ROI, circular mask, N-frame
+                        flatfield capture.
+    * Lens Calibration — grab chessboard views, solve intrinsics, write lens.yaml.
+  Run it FIRST (it owns the camera), tune, Save, quit; then run the tracker,
+  which reads the conf. They never hold the device at once.
+
+    venv/bin/python tools/calibrate_camera.py --list-devices
+    venv/bin/python tools/calibrate_camera.py --device 0 --width 1280 --height 720
+    venv/bin/python tools/calibrate_camera.py --device /dev/video0 --chessboard 9x6
+  Keys: s save, space grab chessboard, c solve lens, d delete last view, p toggle
+  HUD, q/Esc quit.
+  OUTPUTS  camera1.conf ([camera] + [preprocess]) + lens.yaml beside it; a re-run
+           resumes from an existing camera1.conf.

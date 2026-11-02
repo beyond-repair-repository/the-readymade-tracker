@@ -1,0 +1,166 @@
+INSTALL.txt — TheReadymadeTracker setup
+=======================================
+
+Prerequisites
+-------------
+- Python 3.10 or newer (the code uses `X | None` type hints).
+- git
+
+There is NO model file to fetch, NO GPU driver, NO ML runtime. The whole tracker — including the
+optional appearance re-id — runs on numpy + OpenCV alone. There is no per-frame neural inference
+anywhere in the pipeline, so the same checkout runs identically on every host (Mac, Linux, Windows;
+x86 or ARM) with no per-machine accelerator setup.
+
+
+Install (every platform)
+------------------------
+    # macOS / Linux
+    cd TheReadymadeTracker
+    python3 -m venv venv
+    source venv/bin/activate
+    pip install --upgrade pip
+    pip install -r requirements.txt
+
+    # Windows
+    python -m venv venv && venv\Scripts\activate.bat
+    pip install --upgrade pip
+    pip install -r requirements.txt
+
+requirements.txt pulls only numpy + opencv-contrib-python (OpenCV 5). Nothing else is required.
+
+Both are PINNED to exact versions. That is deliberate: they are the entire dependency surface, so
+they are part of any measured result, and unpinned they drift - three machines installed weeks apart
+end up on three different numpy versions, and a benchmark table then compares hardware AND libraries
+without saying which is which. Wheels exist for every platform this runs on, aarch64 included, so
+pinning costs nothing at install time. Check what you got:
+
+    venv/bin/python -c "import numpy,cv2;print(numpy.__version__, cv2.__version__)"
+
+To move the pins, bump both in requirements.txt, reinstall EVERYWHERE, and re-run the benchmarks.
+
+
+Install with a PINNED Python (optional to run, required to benchmark)
+---------------------------------------------------------------------
+The line above uses whatever Python the machine already has, which is fine for running the tracker
+(3.10+). It is not fine for COMPARING machines: CPython 3.14 changed interpreter performance enough
+that two hosts on different versions are no longer measuring only their hardware. So the benchmark
+suite wants the same version everywhere, and `uv` installs a prebuilt standalone CPython in about a
+minute — no compiling, and the system Python is left alone.
+
+    # macOS / Linux / Raspberry Pi
+    curl -LsSf https://astral.sh/uv/install.sh | sh
+    source $HOME/.local/bin/env
+    uv python install 3.14
+    uv venv --python 3.14 --seed venv
+    venv/bin/pip install -r requirements.txt
+
+    # Windows (PowerShell)
+    irm https://astral.sh/uv/install.ps1 | iex
+    uv python install 3.14
+    uv venv --python 3.14 --seed venv
+    venv\Scripts\pip install -r requirements.txt
+
+`--seed` is NOT optional: a uv venv has no pip without it, and everything downstream assumes
+venv/bin/pip exists.
+
+Check what you actually got before relying on it:
+
+    venv/bin/python -V
+    venv/bin/python -c "import numpy,cv2;print(numpy.__version__, cv2.__version__)"
+
+numpy and OpenCV ship prebuilt wheels for every platform this runs on, aarch64 included. If pip
+starts COMPILING either of them, stop — something has selected a version with no wheel for this
+platform, and building OpenCV on a Raspberry Pi takes hours.
+
+
+Optional — appearance re-id ([reid])
+------------------------------------
+The [reid] section adds a closed-set appearance tie-break behind the geometric matcher (it catches a
+FAR / rotated set-down that position alone would re-mint). It is NEURAL-FREE: a classical
+saturation+shape+size descriptor (21-d), computed with the OpenCV you already installed — no
+onnxruntime, no model file, no extra dependency. It is on by default in readymade.conf; comment the
+section out to disable (identity then falls back to shape + position). (The descriptor and the
+study that selected it are documented in the development repository.)
+
+
+Optional — the serial control input ([mcu]: a pedal / knobs)
+------------------------------------------------------------
+The [mcu] section reads a microcontroller over a serial port and drives the SAME surfaces the OSC
+control input drives, so a physical panel needs no new plumbing. The board sends one command per line:
+
+    T                → trigger          the manual scan: capture every settled object NOW and emit
+    D <0.0..1.0>     → [efd] detail     the EFD OSC-out detail level
+
+On **Linux and macOS there is NOTHING to install**: a serial port is a tty, so the plugin opens it
+with the stdlib (os + termios, raw mode at the requested baud) — the pedal costs no dependency, and the
+tracker stays numpy + OpenCV only.
+
+On **Windows** (no termios), or for a device/baud the stdlib path can't take, it falls back to pyserial:
+
+    pip install pyserial       # the package is `pyserial`; the import name is `serial`
+
+If neither path can open the port, the plugin logs an error and stays off; the tracker still runs. Enable
+by adding [mcu] to readymade.conf and setting `port` (Linux /dev/ttyACM0, macOS /dev/tty.usbmodem*,
+Windows COM3) + `baud` to match the firmware (a standard rate: termios needs a B<baud> constant).
+
+
+Optional — UVC camera control (only for `--source camera`)
+----------------------------------------------------------
+The live-camera input backend (plugins/input/camera/) applies exposure/gain/white-balance/etc. through
+a cross-platform shim (lib/camera_controls.py). On Linux (V4L2) and Windows (DirectShow/MSMF) OpenCV's
+CAP_PROP_* set most controls, so nothing extra is needed. On **macOS**, OpenCV goes through
+AVFoundation, which exposes almost NO settable controls — so to LOCK exposure/gain/WB you need pyuvc
+(libuvc over libusb, which bypasses AVFoundation):
+
+    pip install pupil-labs-uvc     # the pyuvc library ships on PyPI as `pupil-labs-uvc`
+                                   # (https://pypi.org/project/pupil-labs-uvc/); the import name is `uvc`.
+                                   # If no wheel covers your platform, building from source needs libusb
+                                   # (`brew install libusb`).
+
+With `[camera] backend = auto` (the default) the camera backend uses pyuvc on macOS when it's
+importable, else it degrades to cv2.VideoCapture (opens and streams, with fewer settable controls).
+Force it either way with `backend = uvc` / `backend = cv2`. pyuvc claims the device exclusively —
+the tracker is the sole camera owner, which is the intended single-client model. On macOS, locking
+exposure/gain over UVC needs the tracker to run with permission to claim the device (typically `sudo`).
+
+Running under sudo is SAFE for your files: every file the tracker creates while root — recordings,
+logs, a saved readymade.conf, a captured flatfield, a MOT export — is handed straight back to the
+user who owns the repo directory, so the next plain (non-sudo) run keeps full access. If a PAST sudo
+session already left root-owned output dirs behind (the symptom: "[rec] cannot open a writer"),
+reclaim them once:
+
+    sudo chown -R $(whoami) recordings logs
+
+Calibrate first, then run (they never hold the device at the same time):
+    pip install dearpygui                                    # the calibration GUI's one extra dep
+    python tools/calibrate_camera.py --device 0 --width 1280 --height 720   # writes camera1.conf
+    python readymade_tracker.py --source camera camera1.conf
+
+
+Running
+-------
+    # video file (macOS / Linux)
+    venv/bin/python readymade_tracker.py --source video tests/videos/hands2.mp4 --pull
+    # Windows
+    venv\Scripts\python readymade_tracker.py --source video tests\videos\hands2.mp4 --pull
+
+Useful flags:
+    --pull           demand-driven input: grab-after-process, no dropped frames, freshest frame
+    --loop           loop the clip at EOF
+    --paused         start paused (step with the transport / webgui)
+    --profile        per-stage timing summary at exit
+    --max-frames N   stop after N frames (eval)
+    --webgui / --no-webgui, --mjpeg, --oscin, --oscout, --rec, --tuio2, --features, --clusters
+                     force an output/plugin on or off (default: on when its [section] is present)
+
+GUI — the browser is the GUI
+----------------------------
+There is no desktop window. When [webgui] is present (it is, by default) the tracker serves a browser
+UI. Open it at:
+
+    http://localhost:8090/
+
+From there you get the input and debug views, every parameter (auto-built from the code), a manual
+SCAN trigger, and SAVE / RESTART / QUIT. The other I/O surfaces, when their
+sections are present: [oscin] OSC control in (port 3401), [mjpeg] video-over-HTTP (port 8080),
+[oscout] OSC data out, [rec] recorder, [tuio2] TUIO 2.0 out.

@@ -1,0 +1,355 @@
+================================================================================
+  THE READYMADE TRACKER — OSC CONTROL PROTOCOL
+  Control-input command reference (software v0.32.88)
+================================================================================
+
+This document specifies the OSC control-INPUT protocol: the messages the tracker
+accepts on a UDP socket to be driven remotely — pause/resume, single-step,
+select the streamed view, start/stop output threads, drive the recorder, run a
+flat-field capture, restart/quit the process, and read or change any live
+parameter.
+
+It is a precise transcription of the running code, not a design sketch:
+  - plugins/control/oscin/oscin.py    the UDP listener + parser + reply path
+  - plugins/control/oscin/oscin.conf  the shipped defaults
+  - lib/control.py                    ControlRouter — the verb dispatch table
+  - lib/params.py                     ParamStore — set / reload / save / query
+  - lib/compose.py                    the valid view names
+  - lib/osc.py                        the OSC codec (decode_packet/encode_*)
+  - readymade_tracker.py              how the listener is constructed + attached
+  - plugins/control/webgui/webgui.py      the browser -> loopback-UDP bridge
+
+Anything this document does not list is not accepted; the complete verb set is
+enumerated at the end.
+
+
+--------------------------------------------------------------------------------
+1. TRANSPORT
+--------------------------------------------------------------------------------
+
+  Protocol   : OSC 1.0 over UDP.
+  Encoding   : each datagram is decoded with lib.osc.decode_packet, which
+               accepts a single OSC message OR an OSC "#bundle" (a bundle is
+               unpacked into its member messages, each dispatched in turn).
+  Message     = an OSC address pattern (e.g. "/rmt/step") + a typed argument
+               list. Argument types below use the OSC tags:
+                   i = int32     f = float32     s = string
+  Bind host  : 0.0.0.0 by default (any interface on the LAN). Set to 127.0.0.1
+               to accept only local traffic. Config key [oscin] host.
+  Port       : 3401 by default (UDP). Config key [oscin] port. A value of 0
+               binds an ephemeral port. This is distinct from the data-OUT
+               ports (the object-egress OSC output and the tabletop-protocol
+               output listen elsewhere; this port is control INPUT only).
+  Prefix     : "/rmt" by default, configurable via [oscin] prefix. Every
+               command address is <prefix>/<verb>. The prefix is normalized to
+               a single leading slash and no trailing slash. Below, "/rmt" is
+               written literally but tracks whatever prefix is configured.
+
+  Enabling   : the listener runs only when the [oscin] section is enabled
+               (present in the config, or --oscin on the command line). Shipped
+               default: enabled = true.
+
+  Fail-soft  : a datagram that is not valid OSC is silently dropped — the
+               receiver never crashes on garbage. An address with the wrong
+               prefix, an unknown verb, or malformed arguments is ignored
+               (returns without effect). A data message that happens to arrive
+               on this port (e.g. an egress feature stream sharing the prefix)
+               is skipped, not misinterpreted.
+
+  Two classes of command:
+    * CONTROL verbs (pause, step, view, output, rec, trigger, flatfield,
+      restart, quit)
+      are translated to an internal (name, args) command and POSTed to a shared
+      CommandInbox. The ControlRouter, running on the main-thread supervisor
+      loop, drains the inbox once per iteration and applies each command. The
+      supervisor polls even while the pipeline is paused, so control stays
+      responsive when paused. These verbs send NO reply.
+    * PARAMETER verbs (set, reload, save, query) are handled directly inside
+      the listener and REPLY to the sender's UDP address. They are active only
+      when a parameter store has been attached (it is, whenever [oscin] is
+      enabled). Without a store these verbs are ignored.
+
+
+--------------------------------------------------------------------------------
+2. CONTROL COMMANDS
+--------------------------------------------------------------------------------
+
+Each entry: address, argument list, semantics. All addresses assume the default
+"/rmt" prefix.
+
+  /rmt/pause
+      args: none
+      Pause the input transport. No effect if the source has no transport.
+
+  /rmt/resume
+      args: none
+      Resume the input transport.
+
+  /rmt/toggle_pause
+      args: none
+      Flip paused/running state.
+
+  /rmt/toggle
+      args: none
+      Alias for /rmt/toggle_pause (translated to the same action).
+
+  /rmt/step   [n:i]
+      args: optional one int.
+      Advance n frames while paused. Default is +1 when no argument is given.
+      n < 0 steps backward (n frames); n == 0 is a no-op. The transport's step
+      counter accumulates, so the requested number of frames is taken on the
+      next frame pull. Requires a transport that supports single-stepping.
+
+  /rmt/seek   [n:i]
+      args: optional one int.
+      Jump to absolute frame n. Default is 0 when no argument is given (reset
+      to the first frame — the webgui's ⏮ button). Requires a seekable
+      transport (video); the camera transport ignores it.
+
+  /rmt/view   <name:s>
+      args: exactly one string (required; missing -> ignored).
+      Select the GLOBAL view that every view-aware output surface follows
+      (the video stream output). The name is lower-cased and each surface
+      validates it. If no view-aware surface is running, the request is logged
+      and otherwise no-ops.
+      VALID VIEW NAMES (from lib.compose.VIEWS):
+          input      the full pre-crop frame (crop-calibration view)
+          debug      the cropped input frame masked to the foreground cut
+          processed  the preprocess output (flip+crop+lens+flatfield+mask
+                     baked) — a recording of it replays with --no-preprocess
+      No other view names exist in v0.32.88.
+
+  /rmt/output   <name:s> <state:s>
+      args: two strings (fewer than two -> ignored).
+      Start or stop an output thread by its config-section name. <name> is
+      lower-cased; <state> is truthy/falsey. Truthy set (case-insensitive):
+          on, true, 1, yes, enable, enabled     (anything else = off)
+      Idempotent: turning an already-running output on, or an already-stopped
+      output off, is a no-op. An unknown section name is logged and ignored.
+      Applicable output sections are those enabled at startup, e.g.:
+          tuio2   the tabletop-protocol data output
+          mjpeg   the video-over-HTTP stream
+          oscout  the per-object OSC egress
+          rec     the video recorder thread
+      NOTE: "output rec off" stops the recorder THREAD; it is different from
+      /rmt/rec (below), which toggles CAPTURE within a running recorder.
+
+  /rmt/rec   [verb:s]
+      args: optional one string; bare (no arg) means "toggle".
+      Toggle/start/stop video CAPTURE on the [rec] recorder. Recognized:
+          start   begin recording          (also any truthy string)
+          stop    stop recording
+          toggle  flip capture state       (the default when no arg)
+      If [rec] is not enabled (no recorder), the request is logged and ignored.
+
+  /rmt/flatfield   <verb:s> [n:i]
+      args: one string, optionally followed by one int.
+          capture [n]   average the next n frames into a new flat-field
+                        correction (default n = 30 when omitted)
+          delete        drop the current flat-field
+      Acts on the live preprocessing stage. If no preprocess stage supports
+      flat-fielding, the request is logged and ignored. (This verb is present
+      in the code but is not listed in the shipped oscin.conf comment block.)
+
+  /rmt/restart
+      args: none
+      Request a full process restart: clean teardown, then re-exec, re-reading
+      the config from disk so SAVEd needs-restart parameters take effect. The
+      supervisor carries this out after the current iteration.
+
+  /rmt/quit
+      args: none
+      Request a graceful shutdown and process exit (same teardown as restart,
+      without the re-exec).
+
+  Unknown or malformed control messages: an unknown verb after a valid prefix
+  is dropped at parse time; a well-formed command whose internal name has no
+  handler is logged ("unknown command") and skipped; a handler that raises is
+  caught and logged. One bad command can never take down the loop.
+
+
+--------------------------------------------------------------------------------
+3. PARAMETER PROTOCOL (set / reload / save / query)
+--------------------------------------------------------------------------------
+
+These verbs read and mutate the LIVE parameter registry. Every stage and plugin
+declares its own parameters (type, numeric range, string enum, default, whether
+the value HOT-applies or NEEDS A RESTART, and a one-line doc). One registry
+backs all four verbs. Each verb REPLIES over UDP to the address the request
+came from.
+
+3.1  /rmt/set   <section:s> <key:s> <value>
+     Requires at least three arguments (fewer -> silently ignored). <value> may
+     be any OSC type; it is coerced to the parameter's declared type.
+     Validation order: type coercion -> enum check (if the param has an enum)
+     -> numeric clamp to [lo, hi]. A comma-list parameter (a multi-select drawn
+     from an enum) is split on commas and each item is enum-checked.
+     A newline/carriage-return inside a string value is rejected (it would
+     corrupt a config line).
+
+     HOT vs NEEDS-RESTART:
+       * A HOT parameter is written to the live object immediately (via the
+         owning plugin's own setter), so it takes effect on the next tick.
+       * A NEEDS-RESTART parameter is STAGED, not applied live: it is recorded
+         as dirty so that /rmt/save can persist it and a restart can apply it.
+
+     REPLY — /rmt/ack :
+       success:  /rmt/ack  <section:s> <key:s> "ok"  <value:s> <clamped:i>
+                     <value>   = the stored value as a string
+                     <clamped> = 1 if the value was clamped to range, else 0
+       failure:  /rmt/ack  <section:s> <key:s> "err" <reason:s>
+                     <reason> is one of:
+                        unknown    no such section/key in the registry
+                        bad_value  type coercion failed, or newline in value
+                        not_in_enum  value not among the allowed enum entries
+                        inactive   a hot param whose target plugin isn't running
+     (The ack does not distinguish "staged" in its wire form; a needs-restart
+      set still returns "ok". Whether it applied live is inferable from the
+      parameter's hot flag reported by /rmt/query.)
+
+3.2  /rmt/reload
+     args: none. Re-read the config files from disk and apply every CHANGED hot
+     key to its live target; changed needs-restart keys are reported but not
+     applied. Unchanged keys are skipped.
+
+     REPLY — /rmt/reloaded :
+       success:  /rmt/reloaded  <n_applied:i> <n_restart:i> <restart_keys:s>
+                     <n_applied>    = count of hot keys applied live
+                     <n_restart>    = count of changed keys that need a restart
+                     <restart_keys> = comma-joined "section.key" list of those
+       failure:  /rmt/reloaded  -1 -1 <reason:s>
+                     <reason> = no_reload (no reload source) or load_error
+                                (the config on disk failed to parse)
+
+3.3  /rmt/save
+     args: none. Persist every value changed this session to the config file, in
+     place — only the changed keys' values are rewritten; comments, ordering,
+     and untouched sections are preserved; the write is atomic. In layered-config
+     mode, edits to layer-owned sections are written to the layer file so they
+     are not masked on the next load. After a save, staged needs-restart changes
+     are on disk and a restart will apply them.
+
+     REPLY — /rmt/saved :
+       success:  /rmt/saved  <written:i> <path:s>
+                     <written> = number of keys written (0 if nothing was dirty)
+                     <path>    = the file the values were written to
+       failure:  /rmt/saved  -1 <reason:s>
+                     <reason> = no_conf (no config path) or write_error
+     (This verb is present in the code but is not listed in the shipped
+      oscin.conf comment block.)
+
+3.4  /rmt/query   [section:s]
+     args: optional one string. With no argument, describe EVERY parameter;
+     with a section name, describe only that section's parameters.
+
+     REPLY — a stream of /rmt/param messages plus one /rmt/params terminator,
+     packed into one or more OSC "#bundle"s each kept under ~8000 bytes (the
+     full manifest exceeds a single safe UDP datagram, so it is chunked; a
+     client folds the rows until it sees the terminator).
+
+       One row per parameter:
+         /rmt/param  <section:s> <key:s> <type:s> <hot:i>
+                     <default:s> <current:s> <lo:s> <hi:s>
+                     <enum:s> <doc:s> <multi:i> <dirty:i>
+                     <effective:s> <readonly:i> <hidden:i>
+         Field meanings:
+             type       "int" | "float" | "str" | "bool"
+             hot        1 = applies live, 0 = needs a restart
+             default    the shipped default, as a string
+             current    the RAW current value (what save would write)
+             lo, hi     numeric range bounds, "" if none
+             enum       comma-joined allowed string values, "" if none
+             doc        one-line human description
+             multi      1 = a comma-list multi-select drawn from enum
+             dirty      1 = changed-but-unsaved this session
+             effective  a read-only resolved/computed runtime value, "" if none
+                        (e.g. a value the runtime negotiates at startup while
+                        the config holds a placeholder); never written by save
+             readonly   1 = show but locked in a UI (needs-restart, computed,
+                        or explicitly locked)
+             hidden     1 = intended to be off-panel
+
+       Terminator:
+         /rmt/params  <count:i>
+             <count> = total number of parameter rows in the manifest, so a
+             client knows when it has received them all.
+
+     A client builds a control surface automatically from this: sliders from
+     [lo, hi], dropdowns from enum, a restart badge from hot, a dirty marker
+     from dirty. No per-parameter schema is hard-coded anywhere.
+
+
+--------------------------------------------------------------------------------
+4. THE BROWSER BRIDGE (webgui)
+--------------------------------------------------------------------------------
+
+When the [webgui] section is enabled, the built-in web interface exposes an HTTP
+endpoint that forwards to this exact OSC protocol, so a browser button and an
+external OSC controller take the identical path:
+
+  POST /osc      body: JSON { "address": "/rmt/<verb>", "args": [ ... ] }
+                 The bridge encodes it to OSC and sends it as a LOOPBACK UDP
+                 datagram to the listener (default 127.0.0.1:3401 — the bridge's
+                 own oscin_host / oscin_port, which mirror [oscin]).
+                 For a control verb (pause / resume / toggle / step / view /
+                 output / rec / flatfield / restart / quit) there is no reply,
+                 and the endpoint returns an empty result.
+                 For a reply verb (set / reload / save / query) the bridge binds
+                 an ephemeral local socket, waits for the reply, and returns the
+                 collected OSC messages as JSON. It completes on the explicit
+                 terminator (/rmt/ack, /rmt/reloaded, /rmt/saved, or /rmt/params)
+                 or a ~2 s deadline — never on a mere inter-packet gap, so a
+                 chunked query manifest is not truncated under load.
+
+  GET  /events   a Server-Sent-Events stream: each fresh scene snapshot as JSON
+                 (object ids, poses, contours, annotations). This is a read-only
+                 telemetry stream, not part of the control protocol, and is
+                 listed here only to distinguish it from POST /osc.
+
+Because the bridge speaks only OSC to the tracker, everything above — the verb
+set, argument shapes, validation, and replies — is identical whether a command
+originates from the browser, a hardware controller, or a sequencer.
+
+
+--------------------------------------------------------------------------------
+5. /rmt/trigger — THE MANUAL SCAN (the pedal)
+--------------------------------------------------------------------------------
+
+  Address : /rmt/trigger
+  Args    : none (any args are ignored)
+  Reply   : none (a control verb)
+
+  Forces an evaluation NOW and emits it: on the next pipeline tick every SETTLING
+  object is captured WITHOUT waiting out its [classify] settle_seconds dwell, and
+  is confirmed at once so it goes straight to the outputs (OSC / TUIO2 / views)
+  rather than waiting out [classify] confirm_seconds.
+
+  This is the operator asserting "the arrangement is set — read it", instead of
+  letting each object's own timer decide. The foot pedal exists: the [mcu]
+  serial control input turns a board's "T" line into exactly this verb, posting
+  to the same CommandInbox. One press commits
+  the table's current arrangement.
+
+  What it does NOT do: it bypasses the DWELL only, never the stability test. An
+  object still genuinely in motion (mask changing frame-over-frame) is NOT
+  captured — that would bake a smeared or hand-occluded footprint. So a trigger
+  during manipulation is safe: it commits whatever is genuinely at rest and
+  ignores what is not.
+
+  Semantics: fire-and-forget and idempotent-until-consumed. Two presses before
+  the next tick are ONE scan. Firing it with no scan trigger wired (a bare
+  embedding) is warned and ignored, never raised.
+
+  Verified end-to-end: with settle_seconds set to 999 (auto-settle impossible), a
+  run captures nothing at all; sending /rmt/trigger over UDP is what produces the
+  captures.
+
+--------------------------------------------------------------------------------
+6. THE COMPLETE VERB SET (verified against the code)
+--------------------------------------------------------------------------------
+
+      pause, resume, toggle_pause, toggle (alias), step, seek, view, output,
+      rec, trigger, flatfield, restart, quit    (control verbs, no reply)
+      set, reload, save, query             (parameter verbs, reply to sender)
+
+================================================================================

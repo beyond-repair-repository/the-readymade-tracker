@@ -1,0 +1,12 @@
+# benchmarks/ deps — the scoring only. Install them INTO THE TRACKER VENV; there is no longer a
+# separate benchmarks/.venv to keep in step:
+#
+#   venv/bin/pip install -r benchmarks/requirements.txt
+#
+# The tracker's own requirements.txt stays exactly numpy + opencv-contrib-python. Nothing here is
+# imported by the tracker, or by run.py and analyze.py — only by score_identity.py, and only to
+# score tracks against the ground truth.
+
+motmetrics==1.4.0    # the MOT metrics (IDF1 / MOTA / id switches). The one direct dependency
+pandas==3.0.3        # motmetrics computes on DataFrames — pinned because it decides the RESULT,
+                     # not just the speed, and an unpinned major can change what a metric means

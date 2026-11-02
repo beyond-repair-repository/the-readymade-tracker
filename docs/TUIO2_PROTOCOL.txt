@@ -1,0 +1,407 @@
+================================================================================
+  THE READYMADE TRACKER — TUIO 2.0 DATA-OUTPUT PROTOCOL
+  Wire specification for the standard-protocol egress  (tracker v0.32.29)
+================================================================================
+
+This document is the authoritative, code-exact description of the TUIO 2.0
+stream emitted by the tracker's `tuio2` output plugin. Every address, every
+typed argument, the packet-splitting rule and the coordinate conventions below
+were read directly from the shipping source.
+
+It is the companion to OSC_OUT_PROTOCOL.txt, which specifies the tracker's OWN
+protocol (the `/rmt` egress on `oscout`). The two are different surfaces at
+different layers, not a complete one and a partial one — see section 7.
+
+Source of truth:
+  plugins/output/tuio2/tuio2.py   — the egress plugin (build path + splitter)
+  lib/osc.py                      — the OSC 1.0 codec (type inference, bundles)
+  lib/geometry.py                 — place_footprint (outline at the live pose)
+  lib/scene.py                    — the per-object snapshot projection
+  tools/tuio2_monitor.py          — an independent receiver, for verification
+
+TUIO 2.0 itself is specified at https://www.tuio.org/?tuio20 — that document,
+not this one, is the authority on the standard's own semantics.
+
+
+================================================================================
+1.  TRANSPORT
+================================================================================
+
+Protocol .............. TUIO 2.0 over OSC 1.0 over UDP (fire-and-forget)
+Codec ................. dependency-free (lib/osc.py); big-endian
+Destination host ...... 127.0.0.1        ([tuio2] empty-`destinations` fallback)
+Destination port ...... 3333             (the TUIO default, 1.x and 2.0 alike)
+Destinations .......... optional `destinations` = "host:port, host:port, …" —
+                        every packet goes to EACH target, so several clients
+                        watch one stream at once. Empty = the single host/port
+                        pair. LIVE: editable mid-run from the webgui OUTPUT
+                        panel or /rmt/set. The same key exists on [oscout].
+Coordinate mode ....... normalized       ([tuio2] coord_mode, default)
+                        normalized = every x, y, w, h is divided by the frame
+                        width / height into [0,1] (the TUIO convention);
+                        `pixel` emits raw post-preprocess frame pixels.
+Send rate ............. every fresh snapshot; `max_fps` throttles (0 = every).
+
+The sender is a THREAD waiting on the SnapshotBus — the single channel out of
+the core. It is decoupled from the pipeline, so a slow or absent receiver never
+touches tick timing.
+
+
+================================================================================
+2.  FRAME STRUCTURE AND PACKET SPLITTING
+================================================================================
+
+One snapshot becomes one or more OSC BUNDLES. Each bundle is:
+
+    /tuio2/frm   <the frame header>
+    …            <component messages for some subset of the alive objects>
+    /tuio2/alv   <the COMPLETE alive set>
+
+Components are packed greedily under `max_packet_bytes` (default 8192 — chosen
+to sit under macOS's `net.inet.udp.maxdgram` floor of 9216, above which sendto
+fails with EMSGSIZE and loses the whole datagram).
+
+EVERY packet repeats `/frm` and the FULL `/alv`, so each packet is a valid,
+self-describing TUIO frame on its own. A receiver merges component messages by
+session id across the packets of one frame. There is always at least one packet
+per snapshot, even with an empty alive set.
+
+Per object, in this order:
+
+    /tuio2/tok        always
+    /tuio2/bnd        iff [tuio2] send_bounds   (default OFF)
+    /rmt/obj          iff [tuio2] include_custom (OPT-IN, default OFF)  — see §5
+    /tuio2/ocg        iff [tuio2] send_contours (default ON), and it fits
+
+Which objects appear (`_emitted`): an object is on the wire when it is NOT
+`ignored`, IS `confirmed` (it has outlived [classify] confirm_seconds), has a
+position, AND has a committed `footprint_contour`. The footprint — not the
+status — is the "is this a real object" test: a fast arm entering at the edge
+goes SETTLING -> MOVED without ever capturing, so a status check alone would
+leak it. Captured spans RESTING, MOVED and HIDDEN, so an occluded or lifted
+object STAYS in /alv at its held pose until it is retired.
+
+
+================================================================================
+3.  COORDINATE AND ANGLE CONVENTIONS
+================================================================================
+
+Position .............. the committed pose (x, y) in POST-preprocess frame
+                        pixels — the same space as the snapshot frame — so
+                        normalizing by the snapshot frame's dimensions is
+                        correct even under crop. Falls back to the blob
+                        centroid when no pose exists yet.
+Angle ................. the ACCUMULATED absolute orientation
+                        (`theta_cumulative`), wrapped to [0, 2*pi) radians,
+                        clockwise-positive in the y-down frame, with 0 = the
+                        shape's OWN anchor feature pointing screen-up (its
+                        dominant asymmetry — the handle — when one exists, so
+                        look-alike objects agree; else its principal axis; the
+                        shape-anchored zero, fixed once at capture).
+                        The per-settle pose angle is NOT reported: it snaps
+                        back to ~0 every time the footprint is re-baked.
+                        NOTE the wrap is lossy — see §7, row "turn count".
+Origin ................ top-left, y down.
+
+Values are HELD, not interpolated. This is a settle-based tracker: while an
+object is in motion the last settled values keep being emitted, and they step
+at the next settle. A client sees a teleport, not a trajectory.
+
+
+================================================================================
+4.  THE TUIO 2.0 MESSAGES
+================================================================================
+
+--------------------------------------------------------------------------------
+/tuio2/frm    f_id:i   time:t   dim:i   source:s
+--------------------------------------------------------------------------------
+    f_id        the snapshot's frame index, masked to int32 (an installation
+                left running crosses 2^31 frames in ~2.3 years at 30 fps, and
+                an unmasked value would make the encoder raise every frame)
+    time        an OSC TimeTag in real NTP-epoch time. The snapshot's `ts` is
+                CAPTURE time on an arbitrary base (video PTS / perf_counter),
+                so it is anchored to the wall clock ONCE, at the first frame:
+                every later timetag is base + ts. Absolute time is therefore
+                real NTP time, and consecutive frames keep their exact capture
+                spacing — the relative timing a musical client consumes.
+    dim         frame dimensions packed as (width << 16) | height
+    source      the [tuio2] `source` name, default "readymade" — distinguishes
+                several trackers on one network
+
+    COMPATIBILITY — the `time` field is the ONLY OSC 't' type tag this plugin
+    emits, and some OSC parsers reject 't' outright and drop the whole message.
+    That is not merely a lost timestamp: /frm also carries `dim`, which every
+    normalized coordinate is read against, so a client that drops /frm cannot
+    place anything at all. Note this is not a broken client — OSC 1.0 lists 't'
+    as an OPTIONAL type (only i/f/s/b are required), so a minimal parser may
+    legitimately not implement it; TUIO 2.0 mandates an optional OSC feature.
+    Pd / PlugData's `else/osc.parse` is a known case.
+
+    Setting [tuio2] `timetag_mode = ints` sends the SAME INSTANT as two plain
+    int32s — unix SECONDS and MICROSECONDS:
+
+        /tuio2/frm   f_id:i   sec:i   usec:i   dim:i   source:s
+
+    so the type tag string is ",iiiis" and no 't' appears anywhere in the packet.
+    Reconstruct the time as `sec + usec / 1e6`.
+
+    NOT the timetag's own two 32-bit halves, which is the obvious reading and
+    does not work: OSC 'i' is SIGNED, and NTP seconds are ~3.99e9 today, past
+    int32's 2147483647 — the encoder raises, and forcing the bits through as a
+    negative int would have a naive client read a time in 1901. The fraction has
+    the same problem for half of every second. Unix seconds fit until 2038, and
+    microseconds are ~33000x finer than a 30 fps frame, so nothing a musical
+    client can hear is lost.
+
+    OFF-SPEC — a conforming TUIO client expects one 't' — so `timetag` remains
+    the default. The BUNDLE's own timetag is unaffected either way (a raw 8-byte
+    header field, never type-tagged), and both egress plugins anchor it
+    identically (OSC_OUT_PROTOCOL.txt section 1.1), so the two streams' bundle
+    timetags are directly comparable.
+
+--------------------------------------------------------------------------------
+/tuio2/tok    s_id:i   tu_id:i   c_id:i   x:f   y:f   angle:f
+--------------------------------------------------------------------------------
+    s_id        the TRACKER's object id. TUIO session ids are unique per
+                session and NEVER recycled, and every other surface (the
+                webgui badge, the /rmt egress, /rmt/obj) speaks this same id.
+    tu_id       ALWAYS 0
+    c_id        ALWAYS 0
+    x, y        position, per §3
+    angle       radians, per §3
+
+    MARKERLESS BY CONTRACT (test-enforced). tu_id (type/user) and c_id
+    (component/symbol) both identify a TAG THE OBJECT CARRIES. A readymade
+    carries none: nothing is ever decoded off it, and this plugin sends no
+    /tuio2/sym at all. Neither field is derived from the tracker id — echoing
+    the id into c_id (as versions before 0.32.17 did) asserted a symbol that
+    was never read, and one that CHANGES whenever a re-acquire mints a new id,
+    silently re-mapping the same physical object under any client that
+    dispatches on c_id. An object IS its session id.
+
+--------------------------------------------------------------------------------
+/tuio2/bnd    s_id:i   x:f   y:f   angle:f   w:f   h:f   area:f
+--------------------------------------------------------------------------------
+    Optional ([tuio2] send_bounds, default OFF) — for box-based clients.
+
+    x, y        the CENTRE of the last observed blob's axis-aligned bbox
+    angle       the same angle as /tok
+    w, h        bbox width / height
+    area        the object's contour area, normalized by the frame area in
+                `normalized` coord_mode, raw px^2 in `pixel` mode. This is the
+                one place a raw px^2 area still reaches a wire: the TUIO 2.0
+                spec defines the field, so it is kept as specified rather than
+                replaced by the tracker's own `size` measure.
+
+--------------------------------------------------------------------------------
+/tuio2/ocg    s_id:i   x0:f   y0:f   x1:f   y1:f   …
+--------------------------------------------------------------------------------
+    Optional ([tuio2] send_contours, default ON). The object's outer contour
+    as a flat run of coordinate pairs, in the coord_mode of §3.
+
+    WHICH outline, by [tuio2] contour_source:
+      footprint (default) — the PERCEPTUAL rest outline (`wire_contour`: the
+        inverse EFD of the components surviving the [efd] detail cut), placed
+        at the object's current pose. Already wire quality, so the contour
+        epsilon never re-simplifies it. Falls back to the approx-poly'd
+        captured footprint when the features stage has not produced one.
+      live — the live observed contour, epsilon-simplified.
+      auto — footprint when available, else live.
+
+    Coordinates are SUB-PIXEL (float32 end to end). They are never snapped to
+    the integer grid: on a small object adjacent samples are fractions of a
+    pixel apart, and int-rounding is what turned the smooth inverse-EFD curve
+    into staircases once a display scaled it up.
+
+    OVERSIZE RULE. If the message would exceed the per-component byte budget
+    (so its packet would blow the UDP ceiling), the contour is progressively
+    coarsened — epsilon doubled, up to 12 times — until it fits. If even the
+    coarsest will not fit, the contour is DROPPED and logged once. That is
+    deliberate: an oversized sendto fails with EMSGSIZE and loses the WHOLE
+    bundle, /tok positions and /alv with it, so shipping the object's POSITION
+    without its outline beats shipping nothing at all.
+
+--------------------------------------------------------------------------------
+/tuio2/alv    s_id:i   s_id:i   …
+--------------------------------------------------------------------------------
+    The complete alive session-id set, repeated in EVERY packet of the frame.
+    An id absent from /alv has left the table.
+
+
+================================================================================
+5.  /rmt/obj — THE ONE NON-TUIO MESSAGE IN THE BUNDLE
+================================================================================
+
+--------------------------------------------------------------------------------
+/rmt/obj    s_id:i   state:s   pose_conf:f
+--------------------------------------------------------------------------------
+    Emitted iff [tuio2] include_custom — OPT-IN, default OFF since 0.32.124:
+    the message's home is the native oscout stream (/rmt/obj rides there as part
+    of send=all), so with both outputs enabled nothing streams twice. Enable
+    this bridge only on a TUIO-ONLY rig that needs the settle lifecycle.
+    A non-TUIO address riding
+    inside the TUIO bundle, carrying two facts TUIO 2.0 has no field for. A
+    conforming TUIO client ignores unknown addresses, so its presence is safe.
+
+    s_id        the same session id as /tok — FIRST, not last
+    state       the tracker's 4-state name: "SETTLING" | "RESTING" | "MOVED" |
+                "HIDDEN"
+    pose_conf   the settle rotation fit's confidence, 0..1 — the Parseval-
+                normalized height of the EFD phase-correlation peak.
+
+    CAVEAT on pose_conf: it reads 1.0 BOTH for a perfect fit AND for the two
+    paths where no fit ran at all — a genuine first settle (the object becomes
+    its own reference) and a symmetry-locked shape (rotation undefined, so the
+    angle is pinned to 0). A client cannot distinguish "measured, perfect"
+    from "not measured". Values below [pose] conf_min (default 0.4) mean the
+    fit was REJECTED and the previous angle is being held.
+
+    It is updated ONCE PER SETTLE, not per frame, and holds in between. Under
+    [pose] max_fits_per_frame the fit can be deferred a frame, in which case
+    the pose and the confidence go stale TOGETHER — a client never sees a new
+    pose paired with an old confidence.
+
+
+================================================================================
+6.  WORKED EXAMPLE
+================================================================================
+
+One object, id 7, at frame pixel (320, 180) in a 640x480 frame, turned 1.2 rad,
+default knobs (bounds off, contours on, custom on):
+
+    #bundle
+      /tuio2/frm   itis   1042  <timetag>  41943520  "readymade"
+                                           ^ (640 << 16) | 480
+      /tuio2/tok   iiifff 7  0  0  0.5  0.375  1.2
+      /rmt/obj     isf    7  "RESTING"  0.93
+      /tuio2/ocg   iff…   7  0.48 0.36  0.49 0.35  …
+      /tuio2/alv   i      7
+
+
+================================================================================
+7.  WHAT TUIO 2.0 CANNOT CARRY MEANINGFULLY
+================================================================================
+
+The tracker's own protocol (OSC_OUT_PROTOCOL.txt) carries facts this stream
+does not. That is not a gap in this plugin: TUIO 2.0 standardises tabletop
+PRIMITIVES — who is where, at what angle, with what outline — and deliberately
+stops before an application-specific descriptor vocabulary, because such a
+vocabulary is by definition not standardisable.
+
+Each row below was tested against the standard's own generic carriers (CTL, a
+variable-length float vector keyed by session id; DAT, mime-typed opaque data;
+the link/association messages; CHG/BND for aggregate geometry). "No" here means
+"not expressible so that a conforming client can UNDERSTAND it" — most of these
+could be made to ride a legal message and arrive as unlabelled numbers.
+
+  FACT (/rmt address)          TUIO 2.0        MEANINGFUL?  WHY NOT
+  ---------------------------- --------------- ------------ ------------------
+  frame header    /frm         /tuio2/frm      YES          —
+  alive set       /alv         /tuio2/alv      YES          —
+  position        /pose x,y    /tuio2/tok      YES          —
+  outline         /contour     /tuio2/ocg      YES          —
+  bbox                         /tuio2/bnd      YES          (send_bounds)
+  state name      /obj         —               PARTLY       no field; rides
+                                                            /rmt/obj as a
+                                                            string
+  pose confidence /obj         —               PARTLY       same
+  turn count      /pose theta  /tuio2/tok      NO           /tok's angle is
+                                                            plain radians; the
+                                                            tracker's raw
+                                                            theta is UNWRAPPED
+                                                            (may be negative or
+                                                            past a full turn).
+                                                            Wrapping to [0,2pi)
+                                                            loses the number of
+                                                            whole turns, which
+                                                            cannot be recovered
+                                                            downstream.
+  shape scalars   /features/*  CTL             NO           CTL is POSITIONAL:
+                                                            no field names. The
+                                                            enabled set is
+                                                            operator-editable,
+                                                            so dropping one
+                                                            feature shifts every
+                                                            later index silently
+                                                            in every client.
+  EFD spectrum    /features/efd CTL / DAT      NO           same namelessness,
+                                                            plus volume: at
+                                                            bins=64 one object's
+                                                            spectrum is up to
+                                                            384 floats (~1.9 kB
+                                                            with its typetag),
+                                                            which would evict
+                                                            the /ocg contours
+                                                            that generic clients
+                                                            DO consume. See the
+                                                            note below.
+  cluster table   /cluster*    —               NO           a cluster is an
+                                                            aggregate OVER
+                                                            objects, not a
+                                                            component. Its
+                                                            geometry needs a
+                                                            session id, which
+                                                            puts it in /alv with
+                                                            no way to mark it
+                                                            "not a tangible" —
+                                                            a generic client
+                                                            draws a phantom
+                                                            object. Attaching it
+                                                            to the dominant
+                                                            member instead
+                                                            mis-attributes the
+                                                            geometry (CHG on a
+                                                            token means THAT
+                                                            token's hull).
+  cluster members /cluster/    link messages   PARTLY       expressible as
+                  members                                   associations, but a
+                                                            client must resolve
+                                                            a two-level graph to
+                                                            learn "these three
+                                                            form a ring".
+  compound objects (voice      /tuio2/tok     YES          over the voice
+  budget, [grouper])           + /ocg                       budget a compound
+                                                            IS a token: shared
+                                                            never-recycled sid,
+                                                            blended mass-scaled
+                                                            outline, dominant
+                                                            member's angle; its
+                                                            fused members leave
+                                                            /alv while grouped.
+  full spectrum   (webgui only) —              N/A          never on any OSC
+                                                            wire by design.
+
+NOTE on the EFD spectrum. Nothing is WITHHELD from a TUIO client by omitting
+it. The emitted contour and the emitted spectrum are the SAME survivor set in
+two domains: `perceptual_contour` is the inverse EFD of exactly the components
+that survive the [efd] detail cut, and the `efd` feature emits those same
+survivors under the same knob. A client receiving /ocg already has the shape.
+The spectrum is that shape in the form a SYNTHESIS client wants, where
+harmonics map onto a sine bank directly — and such a client reads /rmt anyway.
+It can in principle be re-derived from the contour by FFT, at the cost of
+recomputing what the tracker already computed.
+
+CONSEQUENCE. Use this stream for interoperability: any TUIO 2.0 client gets
+position, angle, outline and liveness with no code. Use the /rmt egress
+(OSC_OUT_PROTOCOL.txt) for the tracker's vocabulary: the shape descriptors,
+the EFD spectrum, the compound and cluster tables, and the settle state. Both
+run at once, on different ports, from the same snapshot. They are two surfaces
+at different layers — neither is a degraded version of the other.
+
+
+================================================================================
+8.  VERIFYING THE WIRE
+================================================================================
+
+`tools/tuio2_monitor.py` is a standalone TUIO 2.0 receiver and visualizer that
+speaks only OSC/TUIO — the independent check that the wire carries what this
+document claims:
+
+    venv/bin/python tools/tuio2_monitor.py            # binds 0.0.0.0:3333
+    venv/bin/python tools/tuio2_monitor.py --text     # headless, no window
+    venv/bin/python tools/tuio2_monitor.py --record-osc   # a replayable tape
+
+The build path is pure and unit-tested with no socket: `Tuio2Out.build_packets`
+takes a snapshot and returns the list of datagrams, so the wire format is
+testable by decoding the returned bytes (the development repository's test suite does).
+

@@ -1,0 +1,88 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>ReadyMade Tracker</title>
+  <link rel="stylesheet" href="style.css">
+</head>
+<body>
+  <main class="view">
+    <header>
+      <h1>ReadyMade Tracker</h1>
+      <span class="status">
+        <span id="view" class="tag" title="stream view">--</span> ·
+        <span id="cap" title="capture fps">--</span>/<span id="proc" title="pipeline fps">--</span> fps ·
+        <span id="objs">--</span> obj · frame <span id="frame">--</span>
+        <button id="panel-toggle" class="hdr-btn" title="hide / show the parameters panel">⇥</button>
+        <span id="conn" class="dot" title="connecting…"></span>
+      </span>
+    </header>
+
+    <div class="stage" id="stage">
+      <img id="video" alt="stream">
+      <canvas id="overlay"></canvas>
+      <div class="zoomctl" id="zoomctl">
+        <button data-zoom="out" title="zoom out">−</button>
+        <button data-zoom="fit" title="fit / reset">⤢</button>
+        <button data-zoom="in" title="zoom in">+</button>
+      </div>
+      <div id="inspector" class="inspector"></div>
+    </div>
+
+    <div class="transport">
+      <span id="playback">
+        <button id="playpause" title="pause / resume playback">⏸</button>
+        <button data-osc="seek" data-arg="0" title="reset to the first frame">⏮</button>
+        <button data-osc="step" data-arg="-1" title="step back one frame">⏪</button>
+        <button data-osc="step" data-arg="1" title="step forward one frame">⏩</button>
+        <span class="sep"></span>
+      </span>
+      <button id="scan-btn" data-osc="trigger" title="manual scan (the pedal): capture every settled object NOW, skipping its settle dwell, and emit at once — objects still in motion are left alone">⦿</button>
+      <span class="sep"></span>
+      <button data-view="input" title="input view — the raw camera frame (+ crop/mask calibration guides)">⛶</button>
+      <button data-view="debug" title="debug view — the object-foreground mask">◧</button>
+      <button id="btn-features" title="per-object EFD + feature inspector (client-side; pause to study a shape)">∿</button>
+      <span class="sep"></span>
+      <button id="rec-btn" data-osc="rec" data-arg="toggle" title="record the current view to an mp4">●</button>
+      <button id="snap-btn" title="save a PNG of the current view (frame + overlay)">⧉</button>
+      <span class="sep"></span>
+      <span class="ovl" title="draw these on top of the debug stream (client-side; input shows only the crop/mask guides)">
+        overlay:
+        <label><input type="checkbox" id="ov-outlines" checked>outlines</label>
+        <label title="axis-aligned bounding box of the last observed blob"><input type="checkbox" id="ov-bbox">bbox</label>
+        <label><input type="checkbox" id="ov-clusters" checked>clusters</label>
+        <label title="compound super-objects when over the grouper's max_objects budget"><input type="checkbox" id="ov-groups" checked>groups</label>
+        <label><input type="checkbox" id="ov-ids" checked>ids</label>
+        <label><input type="checkbox" id="ov-rot" checked>rotation</label>
+        <label title="the circular preprocess mask (calibration)"><input type="checkbox" id="ov-mask" checked>mask</label>
+        <label title="the crop ROI — calibrate with crop OFF (full frame), save+restart to apply"><input type="checkbox" id="ov-crop">crop</label>
+        <label title="the rim gate ([observe] edge_ignore_margin): births inside the dotted band are rejected / flagged ignored"><input type="checkbox" id="ov-margin">margin</label>
+        <label title="show HIDDEN objects (lifted/covered husks held for ttl_seconds as relocation candidates) — untick to hide the gray lingering outlines"><input type="checkbox" id="ov-gone" checked>gone</label>
+        <label title="a small color legend for the overlay (object states, clusters, groups)"><input type="checkbox" id="ov-legend">legend</label>
+      </span>
+    </div>
+  </main>
+
+  <div class="resizer" id="resizer" title="drag to resize"></div>
+
+  <aside class="panel" id="panel">
+    <div class="panel-head">
+      <span>parameters</span>
+      <span class="actions">
+        <button id="refresh" title="re-query the tracker">⟳</button>
+      </span>
+    </div>
+    <div class="tabs" id="tabs"></div>
+    <div id="params"><div class="muted">querying…</div></div>
+    <div class="panel-foot">
+      <button id="save" title="write changed params to readymade.conf">save</button>
+      <button id="restart" title="restart the tracker (apply needs-restart changes)">restart</button>
+      <button id="quit" title="shut the tracker down">quit</button>
+    </div>
+  </aside>
+
+  <script src="efd.js"></script>
+  <script src="app.js"></script>
+</body>
+</html>

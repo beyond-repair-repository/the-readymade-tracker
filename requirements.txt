@@ -1,0 +1,30 @@
+# TheReadymadeTracker base dependencies — Python 3.10+ (the code uses `X | None` type hints).
+#
+# The WHOLE tracker needs ONLY numpy + OpenCV 5 — no GPU, no ML runtime, no onnxruntime, no model
+# files. There is no per-frame inference; even appearance re-id ([reid]) is a classical descriptor.
+
+# PINNED, on purpose. Unpinned, three machines installed weeks apart get three different numpy
+# versions, and the benchmark tables then compare hardware AND libraries without saying which is
+# which. These two ARE the dependency surface, so they are part of any measured result. Wheels
+# were CHECKED to exist for CPython 3.13 and 3.14 on Linux aarch64 (Raspberry Pi), Windows
+# x86-64, and macOS arm64 - no compiling. One floor worth knowing: the OpenCV 5 macOS wheel
+# starts at macOS 13, so an older Mac has no wheel for this pin.
+#
+# To move them: bump BOTH here, reinstall on EVERY machine, and re-run the benchmarks. A row
+# measured against different libraries is not comparable to one that was not.
+numpy==2.3.5
+opencv-contrib-python==5.0.0.93   # OpenCV 5 (cv2 5.x). Contrib build; base opencv-python may lag at 4.x.
+
+# --- Optional: UVC camera control (--source camera; macOS exposure/gain/WB lock) -----------------
+#   pip install pupil-labs-uvc        # the pyuvc library's PyPI package; import name `uvc`.
+#   Absent -> the camera backend degrades to cv2.VideoCapture (fewer controls settable on macOS).
+
+# --- Optional: the [mcu] serial control input (a board: pedal / knobs) ----------------------------
+#   NOTHING TO INSTALL on Linux/macOS: a serial port is just a tty, and the stdlib (os + termios)
+#   opens it in raw mode at the right baud. That is the default path.
+#   pip install pyserial              # import name `serial`. ONLY needed on WINDOWS (no termios),
+#                                     # or for a device/baud the stdlib path can't take. Imported
+#                                     # lazily, only when [mcu] is enabled.
+
+# --- Dev/test ------------------------------------------------------------------------------------
+#   pip install pytest               # to run the test suite (in the development repository)

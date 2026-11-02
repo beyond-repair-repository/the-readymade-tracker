@@ -1,0 +1,429 @@
+================================================================================
+  THE READYMADE TRACKER — OSC DATA-OUTPUT PROTOCOL
+  Wire specification for the per-frame OSC egress  (tracker v0.32.20)
+================================================================================
+
+This document is the authoritative, code-exact description of the OSC output
+protocol emitted by the tracker's `oscout` egress plugin. Every address, every
+typed argument, and the datagram-splitting rule below were read directly from
+the shipping source.
+
+This is the tracker's OWN protocol. The standard-protocol stream is specified
+in TUIO2_PROTOCOL.txt, which also tabulates (its section 7) which facts below
+TUIO 2.0 cannot carry meaningfully — the shape descriptors, the EFD spectrum,
+the cluster and compound tables, and the unwrapped turn count. The two run at
+once, on different ports, from the same snapshot: two surfaces at different
+layers, neither a degraded version of the other.
+
+Source of truth:
+  plugins/output/oscout/oscout.py   — the egress plugin (build path + splitter)
+  lib/osc.py                        — the OSC 1.0 codec (type inference)
+  lib/features.py                   — the shape-descriptor + EFD payloads
+  lib/efd.py                        — the elliptic-Fourier subsystem
+  lib/clusters.py                   — the spatial-cluster table (scene channel)
+  lib/grouper.py                    — the voice-budget fusion (compounds ride the per-object wire)
+  lib/scene.py                      — the per-object snapshot projection
+
+
+================================================================================
+1.  TRANSPORT
+================================================================================
+
+Protocol .............. Open Sound Control 1.0 over UDP (fire-and-forget)
+Codec ................. dependency-free (lib/osc.py); big-endian; OSC-strings
+                        are null-terminated and padded to a 4-byte boundary
+Destination host ...... 127.0.0.1        ([oscout] host, default)
+Destination port ...... 3400             ([oscout] port, default)
+Destinations .......... optional `destinations` = "host:port, host:port, …" —
+                        every packet is sent to EACH target, so several clients
+                        (a SuperCollider patch, a monitor, another machine)
+                        watch this one stream at once. Empty = the single
+                        host/port pair. LIVE: editable mid-run from the webgui
+                        OUTPUT panel or /rmt/set. The same key exists on
+                        [tuio2] for the TUIO stream.
+Address prefix ........ /rmt             ([oscout] prefix, default; leading and
+                        trailing slashes are normalized to exactly one leading
+                        slash, so a configured "rmt" or "/rmt/" both yield /rmt)
+Coordinate mode ....... normalized       ([oscout] coord_mode, default)
+                        normalized = every x, y is divided by the frame width /
+                        height into [0,1]; a radius (cluster circle) is divided by
+                        the frame width. Set coord_mode = pixel to emit raw pixel
+                        coordinates (no division) instead.
+Send rate ............. every fresh frame ([oscout] max_fps = 0.0, default;
+                        a positive value throttles the egress to that many fps)
+
+WHAT IS EMITTED (the [oscout] `send` param, default "all")
+  "all"     — every per-object producer annotation on the snapshot (features, …)
+              PLUS the cluster table PLUS pose. This is the default.
+  a comma   — an explicit allow-list of producer names to emit, e.g.
+   list       "features,cluster" ("cluster" gates the whole /rmt/cluster table).
+              The literal token "pose" additionally turns on the /rmt/pose
+              message; "contour" (opt-in ONLY, never part of "all" because it is
+              bulky) turns on the per-object and per-group outline messages.
+
+OSC TYPE INFERENCE (lib/osc.py) — the argument type is inferred from the Python
+value the plugin passes:
+    Python int   -> OSC 'i' (int32)
+    Python float -> OSC 'f' (float32)
+    Python str   -> OSC 's' (OSC-string)
+Object / group / cluster ids, the frame index, and every COUNT (`/rmt/frm`'s
+n_objects, `/rmt/cluster`'s n) are passed as int -> 'i'.
+Every id on the wire is the tracker's raw persistent object id (no recycled
+display label).
+
+ALL per-object ANNOTATION values (the features producer, incl. EFD) are coerced
+to float -> 'f' before sending (`_as_list`), so an annotation field is always
+'f' even when its value is semantically an integer — `lobe_count` is a count and
+still arrives as 'f'. This applies to annotations ONLY: the cluster and compound
+tables are built directly, not through the annotation path, so their counts stay
+'i' (see 2.4 / 2.5).
+
+There are no string arguments in THIS protocol. Note that `/rmt/obj` — same
+`/rmt` prefix, but emitted by the `tuio2` plugin on the TUIO port, not by
+oscout — does carry a string state name; see TUIO2_PROTOCOL.txt section 5.
+
+------------------------------------------------------------------
+1.1  THE PER-FRAME BURST  (build_packet / build_packets)
+------------------------------------------------------------------
+
+Each processed frame produces ONE logical OSC bundle whose element order is:
+
+    1.  /rmt/frm                         (the frame header — ALWAYS FIRST)
+    2.  ... per-object messages ...      (in scene object order; per object:
+                                          its annotation-field messages, then
+                                          its /rmt/pose, then optional contour)
+    3.  ... per-cluster messages ...     (only when a cluster exists and "cluster"
+                                          is sent: /rmt/cluster, /cluster/members,
+                                          /cluster/bbox, /cluster/circle, optional
+                                          /cluster/hull, then /rmt/cluster/alv)
+    5.  /rmt/alv                         (the alive-set — ALWAYS LAST)
+
+The bundle's OSC timetag is real NTP-epoch time; None (a snapshot with no
+capture stamp) means the OSC "immediate" timetag.
+
+------------------------------------------------------------------
+1.2  DATAGRAM-SPLITTING RULE  (build_packets)
+------------------------------------------------------------------
+
+A single UDP datagram cannot exceed the OS limit (a too-large sendto fails with
+EMSGSIZE). A busy frame — many objects times wide fields (e.g. efd bins = 64) —
+would overflow one datagram, so the frame is SPLIT across several bundles, each
+kept under a fixed byte budget:
+
+    Max datagram budget ...... 8192 bytes   (_MAX_DATAGRAM)
+    Bundle overhead counted ... 16 bytes    ("#bundle\0" 8 + timetag 8)
+    Per-element size prefix ... 4 bytes      (each bundle element is length-
+                                              prefixed inside the bundle)
+
+Splitting algorithm (exact):
+  * The ordered message list [ /rmt/frm , <objects> , <clusters> , /rmt/alv ] is
+    packed greedily into bundles. A message is appended to the current bundle
+    unless doing so would push the running size (starting at the 16-byte bundle
+    overhead, adding len(message)+4 per element) over 8192 bytes — in which case
+    the current bundle is flushed as one datagram and a new bundle is started.
+  * Because /rmt/frm is the first message and /rmt/alv is the last, the FRAME
+    HEADER always opens the first datagram and the ALIVE-SET always closes the
+    last datagram of a frame.
+  * A frame's objects MAY span several datagrams. This is safe: every OSC
+    message is self-contained, so a receiver processes each message independently
+    regardless of which datagram carried it.
+  * If a SINGLE message is itself larger than the budget (typically a dense
+    /rmt/contour), it is sent alone with a warning; the OS
+    may drop it. (This is why contour output is opt-in.)
+  * All bundles for one frame share the same frame timetag.
+
+Note: build_packet() (singular) builds the whole frame as ONE bundle and is used
+for unit tests / small frames; the live sender thread always uses build_packets()
+so a fat frame is split correctly.
+
+
+================================================================================
+2.  MESSAGE CATALOGUE  (exact address + typed argument order)
+================================================================================
+
+Legend:  i = OSC int32,  f = OSC float32.  Argument order is left-to-right as
+written; it is exactly the order the plugin builds each message.
+
+------------------------------------------------------------------
+2.1  FRAME HEADER   (always first in a frame; produced by oscout)
+------------------------------------------------------------------
+
+    /rmt/frm   frame_idx:i   n_objects:i   w:i   h:i
+
+    frame_idx  the running frame index of this snapshot
+    n_objects  the number of objects emitted THIS frame (= length of the alive
+               list below; counts only confirmed, non-ignored objects that
+               contributed at least one message)
+    w, h       the processed-frame pixel dimensions (added 0.32.123). Normalized
+               coordinates lose the ASPECT; a renderer divides or multiplies by
+               these to draw unsquashed. Appended args: a positional reader of
+               the first two fields is unaffected.
+
+------------------------------------------------------------------
+2.1b  OBJECT STATE   (per object; part of `send = all`, or the `obj` token)
+------------------------------------------------------------------
+
+    /rmt/obj   id:i   state:s   conf:f
+
+    The settle lifecycle ("SETTLING" | "RESTING" | "MOVED" | "HIDDEN") and the
+    pose-fit confidence 0..1. Added 0.32.123 so the native stream is COMPLETE
+    without TUIO: this message previously existed only as the sidecar inside
+    the /tuio2 bundle ([tuio2] include_custom), where it remains available to
+    TUIO clients. Same shape on both sockets.
+
+------------------------------------------------------------------
+2.2  ALIVE-SET   (always last in a frame; produced by oscout)
+------------------------------------------------------------------
+
+    /rmt/alv   id_0:i   id_1:i   ...   id_{n-1}:i
+
+    A flat list of the object ids emitted this frame (same objects counted by
+    /rmt/frm's n_objects). May be empty (a message with no arguments) when the
+    scene has no emittable objects. A receiver uses this to retire ids it no
+    longer sees ("alive set" semantics).
+
+------------------------------------------------------------------
+2.3  PER-OBJECT MESSAGES
+------------------------------------------------------------------
+
+An object contributes messages ONLY when it is emittable:
+  * ignored objects (edge-connected residue, border blobs) are NEVER emitted;
+  * UNconfirmed objects (a fresh mint still inside the confirm grace) are
+    WITHHELD from all output — only `confirmed` objects appear on the wire.
+
+For each emitted object, the plugin walks the object's producer annotations
+(the derived data stages wrote onto the snapshot) and emits ONE message per
+(producer, field), then the pose, then optionally the contour.
+
+Address shape for every annotation field:
+
+    /rmt/<producer>/<field>   id:i   v0:f   [v1:f  v2:f  ...]
+
+  * <producer> is the stage's namespace ("features", "cluster", …).
+  * <field> is the field name within that producer's payload.
+  * The FIRST argument is always the object id (i); the remaining args are the
+    field's value list (always float 'f', one 'f' for a scalar, several for a
+    vector such as EFD).
+
+
+2.3.1  SHAPE-FEATURE PAYLOAD  (producer = "features"; stage = lib/features.py)
+
+The features stage computes the enabled shape descriptors once per settled shape
+and annotates them under "features" as { feature_name: [floats] }. Each enabled
+feature becomes its own address. With the shipped default enable list
+(readymade.conf [features] enable), the messages are:
+
+    /rmt/features/size                    id:i   v:f     # LINEAR extent: equiv. diameter / reference
+    /rmt/features/eccentricity            id:i   v:f     # STANDARD e: 0=circle .. ->1=a line
+    /rmt/features/circularity             id:i   v:f     # 4*pi*A/P^2, 1=disc
+    /rmt/features/rectangularity          id:i   v:f     # box-ness: 0=disc .. 1=filled rectangle
+    /rmt/features/solidity                id:i   v:f     # A / convex-hull A
+    /rmt/features/lobe_count              id:i   v:f     # dominant radial m-fold / #prongs
+    /rmt/features/spikiness               id:i   v:f     # sharpness of the 1-2 sharpest OUTWARD points
+    /rmt/features/reflectional_symmetry   id:i   v:f     # 1=mirror-symmetric
+    /rmt/features/efd                     id:i   <triples:f>   # see 2.3.2
+
+Each scalar feature is a single 'f'. All are 0..1 EXCEPT lobe_count, which is a
+count: 0 when no dominant lobing is measurable, else the m-fold. Its DECLARED
+span in the registry is (0, 16), but measurement on the real corpus produced
+values up to 23, so a client must not assume 16 bounds it — the declaration is
+a known open item, not a guarantee. Every other feature's declared span is
+(0, 1) and is a guarantee: an unmeasurable input returns the span MINIMUM.
+
+The feature SET is config-driven: any registered descriptor named in [features]
+enable emits under its own name, and a disabled one emits nothing. Adding a
+feature = one new address, with no change to this plugin. Three descriptors
+(ellipse_variance, circle_variance, defect_depth) are SYSTEM-INTERNAL to reid's
+shape block and are never emitted here whatever the conf says.
+
+
+2.3.2  EFD PAYLOAD  (the /rmt/features/efd vector; lib/features.py + lib/efd.py)
+
+The `efd` feature is the object's shape spectrum as a SPARSE, flat list of
+SIGNED-BIN TRIPLES. After the leading object id, the arguments are:
+
+    /rmt/features/efd   id:i   signed_bin:f amplitude:f phase:f   (repeated)
+
+i.e. the arguments after `id` are a flat run of (signed_bin, amplitude, phase)
+triples — 3 floats per SURVIVING conjugate bin, in ascending harmonic order
+(+n before -n when both survive):
+
+  * ONE triple per surviving BIN — a harmonic may contribute both conjugate
+    bins, just one, or none (each ±bin survives the detail cut on its OWN; a
+    near-circle typically emits a lone fundamental winding).
+  * signed_bin : the signed harmonic index as a float — +n (the ellipse's
+                 forward winding) or -n (the reverse winding). Its sign
+                 distinguishes the two conjugate bins.
+  * amplitude  : |c[bin]| divided by the loudest single BIN of the whole
+                 spectrum (max over all |c[±n]|, found by SEARCH — it may be
+                 +1, -1, or any harmonic), so the loudest bin = 1.0 and the
+                 spectrum is size-invariant.
+  * phase      : the complex argument of c[bin], in radians, in (-pi, pi].
+
+WHICH bins are kept (adaptive, shape-driven — lib/efd.select_detail):
+  A per-COMPONENT ± threshold. The [efd] detail knob (0..1) sets a dB cut
+  cut_db = -detail * 100 dB below the loudest single bin (0 dB); each
+  conjugate bin survives on its own (|c[+n]| >= cut keeps +n; |c[-n]| >= cut
+  keeps -n). So the emitted triple count reflects the shape: a near-circle
+  keeps ~1 bin (its single winding — the ~0 opposite winding drops), a busy
+  contour keeps many, and a split harmonic whose two bins each fall below the
+  cut drops entirely. detail = 0 keeps only the loudest bin; detail = 1 keeps
+  down to the floor. The loudest bin always survives. Max harmonic width is
+  [efd] bins (default 64). A degenerate (point-like) contour emits an EMPTY
+  efd list (only the id).
+
+  Example: if bins {+1, -1, +3} survive, the message carries the id then 3
+  triples (9 floats): (+1,a,p)(-1,a,p)(+3,a,p) — note the lone +3 (its -3
+  fell below the cut).
+
+
+2.3.3  POSE  (produced by oscout when pose output is on — default)
+
+    /rmt/pose   id:i   x:f   y:f   theta:f
+
+    x, y    the object's committed position. Normalized to [0,1] by frame
+            width/height in the default coord_mode = normalized; raw pixels in
+            coord_mode = pixel.
+    theta   the object's ACCUMULATED orientation in radians (theta_cumulative)
+            — continuous across re-settles, the same angle the TUIO 2.0 token
+            carries (the token additionally wraps it to [0, 2pi)). A compound
+            reports its area-dominant member's angle.
+            SHAPE-ANCHORED zero: 0 means the shape's OWN anchor feature points
+            screen-up, clockwise-positive in the y-down frame — its dominant
+            asymmetry (the handle) when a unique bump exists, so look-alike
+            objects agree; else its principal (elongation) axis. The anchor is
+            measured once from the canonical footprint at capture; a
+            near-isotropic shape (circle, square) anchors at 0. Unwrapped here:
+            it may be negative or wind past a full turn (integrate turns from
+            this one). (The internal per-settle pose angle snaps back to ~0
+            whenever the footprint is re-baked; it is never reported.)
+
+Emitted for every emitted object whose pose is set. (Pose is the tracker's core
+placement; it is NOT an annotation producer — it comes straight off the object.)
+
+
+2.3.4  CONTOUR  (opt-in ONLY — [oscout] send must include "contour")
+
+    /rmt/contour   id:i   x0:f y0:f   x1:f y1:f   ...   (repeated point pairs)
+
+    The object's PERCEPTUAL rest outline PLACED at its live pose (it tracks the
+    object, it is not frozen at rest), as a flat list of (x, y) point pairs
+    following the id. The outline is the inverse EFD of the components surviving
+    the [efd] detail cut — the same shape the /rmt/features/efd spectrum
+    describes, so detail is the one quality dial for both (when the features
+    stage is disabled it falls back to the approx-poly'd captured footprint at
+    [observe] contour_epsilon). Same coordinate normalization as pose. Bulky —
+    excluded from "all", enabled only when "contour" is in the send list.
+
+------------------------------------------------------------------
+2.4  CLUSTER MESSAGES   (producer = "cluster"; stage = lib/clusters.py)
+------------------------------------------------------------------
+
+The clusters stage groups nearby objects into persistent, DISJOINT clusters
+(proximity union-find; each object in <= 1 cluster) and publishes a
+CLUSTER-CENTRIC table on the scene `clusters` channel — one record per cluster
+keyed by cluster id, NOT a per-object annotation. It ships membership + geometry
+FACTS only, never a ring/step layout: a client reads `members` and joins them to
+the /pose table to compute whatever angle/order/velocity it wants (a radial
+sequencer's ring is a client concern now, not the wire's). The shape mirrors the
+compound-group table (2.5).
+
+When at least one cluster exists, the plugin emits, for each cluster:
+
+    /rmt/cluster   cid:i   n:i   cx:f   cy:f
+
+        cid         persistent cluster id (kept across frames by membership overlap)
+        n           member count of this cluster
+        cx, cy      cluster centroid = mean member position (normalized by default
+                    coord_mode: cx by width, cy by height; raw pixels in pixel mode)
+
+    /rmt/cluster/members   cid:i   obj_id_0:i   obj_id_1:i   ...
+
+        The VOICE ids for this cluster: cid first (i), then each member id as
+        int 'i'. A member is whatever the wire ships — an object id, or a
+        compound's id when the Grouper is over budget — and every one is on the
+        /pose wire, so a client can always join membership to per-object pose.
+        (BREAKING at v0.32.104: a cluster over compounds used to flatten to the
+        underlying object ids; it now lists the compound ids themselves.)
+
+    /rmt/cluster/bbox   cid:i   x:f   y:f   w:f   h:f
+
+        Axis-aligned bounding box over the member bodies. x,w normalized by width;
+        y,h by height (raw pixels in pixel mode).
+
+    /rmt/cluster/circle   cid:i   cx:f   cy:f   r:f
+
+        Min-enclosing circle over the member bodies: its own centre (cx by width,
+        cy by height) and radius r (normalized by width; raw pixels in pixel mode).
+        This is the circle a viz strokes — it differs from the centroid above.
+
+    /rmt/cluster/hull   cid:i   x0:f y0:f   x1:f y1:f   ...
+
+        The cluster's convex hull as a flat (x, y) point list following cid. Same
+        normalization as other coordinates. Omitted for a degenerate cluster.
+
+And ONCE per frame, after all cluster messages (only when at least one cluster
+exists):
+
+    /rmt/cluster/alv   cid_0:i   cid_1:i   ...
+
+        The alive-set of cluster ids this frame — the cluster-level counterpart to
+        the object /rmt/alv. A flat list of cluster ids (i).
+
+  * The whole cluster table is gated by [oscout] send: emitted under "all" (the
+    default) or when "cluster" is in the send list; suppressed otherwise.
+  * A cluster is a SETTLE-HELD set (no debounce timers): an object JOINS by
+    settling (RESTING) — a blob carried across the ring never rests there, so
+    it never flashes in; it is HELD through occlusion / motion while PRESENT
+    (identity's motion-aware verdict); it LEAVES only when GONE (its spot bared
+    AND quiet). A cluster that drops below [clusters] min_objects dissolves and
+    its id disappears from /rmt/cluster/alv.
+
+------------------------------------------------------------------
+2.5  THE VOICE BUDGET   (stage = lib/grouper.py; the fused emit view)
+------------------------------------------------------------------
+
+The Grouper is an OUTPUT-side voice-budget stage — and it is INVISIBLE as a
+protocol: there are no group messages. When more confirmed, non-ignored objects
+are present than the voice budget ([grouper] max_objects), the tracker fuses
+the nearest into <= max_objects COMPOUND objects and REPLACES the fused members
+on every output wire. A compound is an ordinary object here:
+
+  * its id is drawn from the SAME never-recycled sequence as object ids (no
+    aliasing, stable across frames by membership overlap);
+  * its contour is the complex-EFD blend of its members, MASS-SCALED so the
+    contour's area is the summed member area — big members dominate the shape,
+    and the whole mass sets the scale;
+  * its features (size included) are measured from that contour by the SAME
+    features pass as any object — push objects together and `size` grows;
+  * its /rmt/pose theta is the area-dominant member's accumulated angle.
+
+Members simply leave /rmt/alv while fused and return when the group dissolves.
+Under budget (or with the stage disabled — the shipped default is
+[grouper] enabled = false).
+
+
+================================================================================
+3.  WHICH STAGE PRODUCES WHICH FIELD
+================================================================================
+
+    MESSAGE / FIELD                       PRODUCED BY
+    ------------------------------------  -------------------------------------
+    /rmt/frm , /rmt/alv                   oscout (frame framing)
+    /rmt/pose                             the object's core pose (via oscout)
+    /rmt/contour                          the object's rest outline (via oscout)
+    /rmt/features/<scalar>                the features stage (lib/features.py)
+    /rmt/features/efd  (triples)          the features stage + EFD subsystem
+                                          (lib/features.py -> lib/efd.py)
+    /rmt/cluster/*                        the clusters stage (lib/clusters.py)
+    (compound objects, over budget)       the grouper stage (lib/grouper.py) —
+                                          they ride the per-object addresses
+
+EMISSION GATING (recap — enforced in oscout `_frame_elements`):
+  * IGNORED objects (edge/border residue) are never emitted.
+  * UNCONFIRMED objects (fresh mints still in the confirm grace) are withheld
+    from ALL output; only `confirmed` objects appear on the wire.
+  * An object contributes to /rmt/frm's count and /rmt/alv only if it produced
+    at least one message.
+  * Over the voice budget the emitted population is the FUSED EMIT VIEW:
+    compounds stand in for their members; under budget it is the plain objects.
