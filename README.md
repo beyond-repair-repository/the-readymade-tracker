@@ -1,7 +1,13 @@
 # TheReadymadeTracker
 
-A **settle-based, partial-update** tabletop object tracker — Python + OpenCV 5 + NumPy.
-No per-frame inference, no model files, no ML runtime.
+The Readymade Tracker is an open-source toolkit for tangible tabletop interaction with
+unmodified everyday objects. It follows unmarked objects under a single overhead camera,
+without markers, learned models or a GPU, and publishes their position, rotation, outline and
+shape features over OSC and TUIO 2.0 once they have come to rest. The engine is written in
+Python 3 and depends on NumPy and OpenCV 5 only.
+
+It accompanies the paper *Readymade Tangible Interaction: A Framework for Exploring Everyday
+Objects As Tangibles* by Antoni Rayzhekov and Martin Murer (TEI 2027).
 
 While objects are being moved the tracker **holds the last settled state** (outputs keep
 emitting the frozen registry); when a region goes quiet it re-scans **only that region** and
