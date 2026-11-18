@@ -6,9 +6,11 @@ Three minimal clients — one per interaction paradigm, one per platform.
 - [`supercollider/readymade_pad.scd`](supercollider/README.md) — **malleable tangibles** (vanilla SC)
 - [`vvvv/readymade-demo_2.vl`](vvvv/README.md) — **perceptual-property physics** (vvvv gamma)
 
-Each folder has a `demo.mp4`, a short captioned screen recording of the example running.
+Each folder holds two videos:
 
-Each example runs against a live camera. `camera1.conf` is written by the calibration tool
-(`tools/calibrate_camera_web.py`). To try a client without a camera, start the tracker on one
-of the clips in `tests/videos/` as in the main README; the objects in those clips are not the
-ones each example was designed for.
+- the recorded table clip the example replays (`two_cups.mp4`, `crumbs.mp4`, `physics.mp4`), a
+  tracker recording that runs without a camera,
+- `demo.mp4`, a short captioned screen recording of the example running.
+
+For a live table, each README also gives the camera variant of its command. `camera1.conf` is
+written by the calibration tool (`tools/calibrate_camera_web.py`).

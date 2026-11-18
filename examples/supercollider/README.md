@@ -18,11 +18,14 @@ Vanilla only, no quarks.
 
 ## Run
 
-Tracker first, on a calibrated live camera (on macOS prefix the command with `sudo`)
-— the native stream plus the contour opt-in (the radial scan is
+Tracker first, replaying the recorded clip `crumbs.mp4` (a tracker recording, so it
+replays without preprocessing) — the native stream plus the contour opt-in (the radial scan is
 cut from it; without the flag the example still runs, just without the breath):
 
-    venv/bin/python readymade_tracker.py --source camera camera1.conf --oscout --set oscout send "all, contour"
+    venv/bin/python readymade_tracker.py --source video examples/supercollider/crumbs.mp4 --loop --no-preprocess --oscout --set oscout send "all, contour"
+
+For a live table, replace `--source video examples/supercollider/crumbs.mp4 --loop --no-preprocess` with
+`--source camera camera1.conf` (on macOS, prefix the command with `sudo`).
 
 Then open `examples/supercollider/readymade_pad.scd` in the SC IDE and evaluate
 the block (or `sclang examples/supercollider/readymade_pad.scd`). First check

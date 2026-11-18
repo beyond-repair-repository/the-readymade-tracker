@@ -21,15 +21,18 @@ Watch it run: [`demo.mp4`](demo.mp4), a short captioned screen recording.
 
 ## Run
 
-Tracker on the table's machine, on a calibrated live camera (on macOS prefix the
-command with `sudo`) — native stream + contour + the MJPEG server;
+Tracker on the table's machine, replaying the recorded clip `physics.mp4` (a tracker
+recording, so it replays without preprocessing) — native stream + contour + the MJPEG server;
 put the vvvv PC's IP in `destinations`:
 
-    venv/bin/python readymade_tracker.py --source camera camera1.conf \
+    venv/bin/python readymade_tracker.py --source video examples/vvvv/physics.mp4 --loop --no-preprocess \
         --oscout --mjpeg \
         --set oscout send "all, contour" \
         --set oscout destinations "127.0.0.1:3400, <VVVV-PC-IP>:3400" \
         --set efd bins 48
+
+For a live table, replace `--source video examples/vvvv/physics.mp4 --loop --no-preprocess` with
+`--source camera camera1.conf` (on macOS, prefix the command with `sudo`).
 
 Then open `examples/vvvv/readymade-demo_2.vl` in gamma and set the
 `MjpegClient` host pin to the tracker machine's IP (port 8080) — Create-group

@@ -16,10 +16,13 @@ Linux / Raspberry Pi: `sudo apt install puredata`.
 
 ## Run
 
-Tracker first, on a calibrated live camera with two cups on the table (TUIO 2.0 on
-:3333 is on by default; on macOS prefix the command with `sudo`):
+Tracker first, replaying the recorded clip `two_cups.mp4` (TUIO 2.0 on :3333 is on by
+default; the clip is a tracker recording, so it replays without preprocessing):
 
-    venv/bin/python readymade_tracker.py --source camera camera1.conf
+    venv/bin/python readymade_tracker.py --source video examples/puredata/two_cups.mp4 --loop --no-preprocess
+
+For a live table, replace `--source video examples/puredata/two_cups.mp4 --loop --no-preprocess` with
+`--source camera camera1.conf` (on macOS, prefix the command with `sudo`).
 
 Then open `examples/puredata/readymade_knob.pd` in Pd. The slider jumps when the
 left cup settles and recolors when the right one does — one committed step per
