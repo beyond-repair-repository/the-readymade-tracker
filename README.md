@@ -109,8 +109,9 @@ is catalogued in [`docs/CONFIGURATION.md`](docs/CONFIGURATION.md).
 
 ## Version
 
-`MAJOR.MINOR.BUILD`; BUILD bumps per minor commit, MINOR per bigger change.
-The source of truth is `__version__` in `readymade_tracker.py`.
+The tracker prints its version number when it starts, for example `ReadyMade Tracker v0.32.168`.
+The number reads `MAJOR.MINOR.BUILD`, where BUILD increases with every small change and MINOR
+with every larger one. It is defined in one place, as `__version__` in `readymade_tracker.py`.
 
 ## License
 
