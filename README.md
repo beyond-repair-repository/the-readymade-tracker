@@ -30,6 +30,28 @@ python3 -m venv venv && ./venv/bin/pip install -r requirements.txt
 
 Then open the webgui at `http://localhost:8090/`. Ports: webgui 8090 / mjpeg 8080 / oscin 3401.
 
+With a live camera on **macOS**, start it with `sudo`, since locking exposure, gain and white
+balance over UVC needs permission to claim the device (see [`INSTALL.txt`](INSTALL.txt)):
+
+```sh
+./venv/bin/pip install pupil-labs-uvc
+sudo ./venv/bin/python readymade_tracker.py --source camera camera1.conf
+```
+
+`camera1.conf` is written by the calibration tool (`tools/calibrate_camera_web.py`).
+
+## Screenshots
+
+The browser control surface, debug view: settled objects with ids and rotation, a cluster
+(`C1`) and a fused group (`G6·2`), with the live parameters on the right.
+
+![The webgui debug view with tracked objects, a cluster and a group](docs/img/fig_browser.png)
+
+The features view: the EFD outline as sent on the wire, its spectrum, and the scalar shape
+features of the selected object.
+
+![The webgui features view with the EFD wire outline, spectrum and scalar features](docs/img/fig_features_view.png)
+
 ## Benchmarks
 
 The distribution carries the benchmark of the paper *Readymade Tangible Interaction: A
