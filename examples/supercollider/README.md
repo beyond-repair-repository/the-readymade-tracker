@@ -8,6 +8,8 @@ unwrapped radial scan breathes the voice as a slow self-AM (5 s per revolution
 of the silhouette). Push crumbs together and the tracker fuses their voices
 into one deeper compound.
 
+Watch it run: [`demo.mp4`](demo.mp4), a short captioned screen recording.
+
 ## Install
 
 SuperCollider (tested with 3.14): <https://supercollider.github.io/downloads>

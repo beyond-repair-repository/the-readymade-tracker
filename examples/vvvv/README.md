@@ -7,6 +7,8 @@ body wears **the photograph of its own object**: a sprite cut from the live
 MJPEG stream at the moment it settled. Drop a paper crumb and watch it bounce
 as itself.
 
+Watch it run: [`demo.mp4`](demo.mp4), a short captioned screen recording.
+
 ## Install
 
 - **vvvv gamma** (tested with 2025.7): <https://visualprogramming.net/>

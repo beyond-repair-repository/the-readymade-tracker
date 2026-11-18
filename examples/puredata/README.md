@@ -6,6 +6,8 @@ with its angle (up = 50 %, right → 100 %, left → 0 %); a cup on the right ha
 paints the same slider (angle → hue). Values commit at settle; ids don't matter —
 the slot is the identity.
 
+Watch it run: [`demo.mp4`](demo.mp4), a short captioned screen recording.
+
 ## Install
 
 Vanilla Pure Data ≥ 0.46 (no externals; tested with 0.56):
