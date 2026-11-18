@@ -7,9 +7,6 @@ body wears **the photograph of its own object**: a sprite cut from the live
 MJPEG stream at the moment it settled. Drop a paper crumb and watch it bounce
 as itself.
 
-> The demo clip `physics.mp4` is not in the repository yet. Until it is, use a live camera or a
-> clip from `tests/videos/` (run as in the main README, without `--no-preprocess`).
-
 ## Install
 
 - **vvvv gamma** (tested with 2025.7): <https://visualprogramming.net/>
@@ -22,10 +19,11 @@ as itself.
 
 ## Run
 
-Tracker on the table's machine — native stream + contour + the MJPEG server;
+Tracker on the table's machine, on a calibrated live camera (on macOS prefix the
+command with `sudo`) — native stream + contour + the MJPEG server;
 put the vvvv PC's IP in `destinations`:
 
-    venv/bin/python readymade_tracker.py --source video examples/vvvv/physics.mp4 --loop --no-preprocess \
+    venv/bin/python readymade_tracker.py --source camera camera1.conf \
         --oscout --mjpeg \
         --set oscout send "all, contour" \
         --set oscout destinations "127.0.0.1:3400, <VVVV-PC-IP>:3400" \

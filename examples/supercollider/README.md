@@ -8,9 +8,6 @@ unwrapped radial scan breathes the voice as a slow self-AM (5 s per revolution
 of the silhouette). Push crumbs together and the tracker fuses their voices
 into one deeper compound.
 
-> The demo clip `crumbs.mp4` is not in the repository yet. Until it is, use a live camera or a
-> clip from `tests/videos/` (run as in the main README, without `--no-preprocess`).
-
 ## Install
 
 SuperCollider (tested with 3.14): <https://supercollider.github.io/downloads>
@@ -19,10 +16,11 @@ Vanilla only, no quarks.
 
 ## Run
 
-Tracker first — the native stream plus the contour opt-in (the radial scan is
+Tracker first, on a calibrated live camera (on macOS prefix the command with `sudo`)
+— the native stream plus the contour opt-in (the radial scan is
 cut from it; without the flag the example still runs, just without the breath):
 
-    venv/bin/python readymade_tracker.py --source video examples/supercollider/crumbs.mp4 --loop --no-preprocess --oscout --set oscout send "all, contour"
+    venv/bin/python readymade_tracker.py --source camera camera1.conf --oscout --set oscout send "all, contour"
 
 Then open `examples/supercollider/readymade_pad.scd` in the SC IDE and evaluate
 the block (or `sclang examples/supercollider/readymade_pad.scd`). First check

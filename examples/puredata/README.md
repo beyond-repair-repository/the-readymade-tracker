@@ -6,9 +6,6 @@ with its angle (up = 50 %, right → 100 %, left → 0 %); a cup on the right ha
 paints the same slider (angle → hue). Values commit at settle; ids don't matter —
 the slot is the identity.
 
-> The demo clip `two_cups.mp4` is not in the repository yet. Until it is, use a live camera or a
-> clip from `tests/videos/` (run as in the main README, without `--no-preprocess`).
-
 ## Install
 
 Vanilla Pure Data ≥ 0.46 (no externals; tested with 0.56):
@@ -17,10 +14,10 @@ Linux / Raspberry Pi: `sudo apt install puredata`.
 
 ## Run
 
-Tracker first (TUIO 2.0 on :3333 is on by default; the demo clip is a tracker
-recording, so replay without preprocessing):
+Tracker first, on a calibrated live camera with two cups on the table (TUIO 2.0 on
+:3333 is on by default; on macOS prefix the command with `sudo`):
 
-    venv/bin/python readymade_tracker.py --source video examples/puredata/two_cups.mp4 --loop --no-preprocess
+    venv/bin/python readymade_tracker.py --source camera camera1.conf
 
 Then open `examples/puredata/readymade_knob.pd` in Pd. The slider jumps when the
 left cup settles and recolors when the right one does — one committed step per
