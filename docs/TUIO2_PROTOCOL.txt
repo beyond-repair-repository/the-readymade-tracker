@@ -403,5 +403,5 @@ document claims:
 
 The build path is pure and unit-tested with no socket: `Tuio2Out.build_packets`
 takes a snapshot and returns the list of datagrams, so the wire format is
-testable by decoding the returned bytes (the development repository's test suite does).
+testable by decoding the returned bytes (tests/test_tuio2.py does).
 

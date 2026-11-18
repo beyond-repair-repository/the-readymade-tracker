@@ -62,3 +62,9 @@ needed to run the tracker or to reproduce the benchmark.)
   HUD, q/Esc quit.
   OUTPUTS  camera1.conf ([camera] + [preprocess]) + lens.yaml beside it; a re-run
            resumes from an existing camera1.conf.
+
+  tools/calibrate_camera_web.py is the same three-tab workflow served as a local
+  web page (MJPEG live stream + HTML controls), with the same conf/lens output
+  and no dearpygui dependency:
+
+    venv/bin/python tools/calibrate_camera_web.py --list-devices

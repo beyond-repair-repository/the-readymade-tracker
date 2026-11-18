@@ -17,7 +17,7 @@ manual ``/rmt/trigger``) — classic reactable / partial-update operation.
 
 from __future__ import annotations
 
-__version__ = "0.32.165"           # MAJOR.MINOR.BUILD — bump BUILD per minor commit, MINOR per bigger change
+__version__ = "0.32.168"           # MAJOR.MINOR.BUILD — bump BUILD per minor commit, MINOR per bigger change
 
 import argparse
 import errno

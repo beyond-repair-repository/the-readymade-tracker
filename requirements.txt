@@ -27,4 +27,4 @@ opencv-contrib-python==5.0.0.93   # OpenCV 5 (cv2 5.x). Contrib build; base open
 #                                     # lazily, only when [mcu] is enabled.
 
 # --- Dev/test ------------------------------------------------------------------------------------
-#   pip install pytest               # to run the test suite (in the development repository)
+#   pip install pytest               # to run the test suite (tests/)

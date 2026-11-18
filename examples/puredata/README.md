@@ -6,6 +6,9 @@ with its angle (up = 50 %, right → 100 %, left → 0 %); a cup on the right ha
 paints the same slider (angle → hue). Values commit at settle; ids don't matter —
 the slot is the identity.
 
+> The demo clip `two_cups.mp4` is not in the repository yet. Until it is, use a live camera or a
+> clip from `tests/videos/` (run as in the main README, without `--no-preprocess`).
+
 ## Install
 
 Vanilla Pure Data ≥ 0.46 (no externals; tested with 0.56):

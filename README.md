@@ -32,7 +32,8 @@ Then open the webgui at `http://localhost:8090/`. Ports: webgui 8090 / mjpeg 808
 
 ## Benchmarks
 
-The distribution carries the paper's benchmark: one raw 1920×1080 recording is both the
+The distribution carries the benchmark of the paper *Readymade Tangible Interaction: A
+Framework for Exploring Everyday Objects As Tangibles*: one raw 1920×1080 recording is both the
 performance workload (the full preprocess chain, paced at real time, with a real OSC/TUIO
 client receiving both output streams) and the correctness check (scored against a hand-made
 MOT ground truth). Two commands per machine:
@@ -58,17 +59,19 @@ plugins/
   input/                video file · UVC camera backends
   control/              control INPUTS: oscin (OSC) · webgui (browser surface) · mcu (serial)
   output/               tuio2 · oscout (the tracker's own OSC) · mjpeg · rec (mp4 recorder)
-tools/                  tuio2_monitor.py (the wire inspector) · calibrate_camera.py
+tools/                  tuio2_monitor.py (the wire inspector) · calibrate_camera.py (dearpygui) ·
+                        calibrate_camera_web.py (the same calibration in the browser, no extra dep)
 benchmarks/             the benchmark suite: run.py / analyze.py + calibration + results
+tests/                  the pytest suite (pip install pytest; venv/bin/python -m pytest tests)
 tests/videos/           the benchmark clips and their MOT ground truth
-docs/                   ARCHITECTURE · CONFIGURATION · OSC_COMMAND_PROTOCOL · OSC_OUT_PROTOCOL ·
-                        TUIO2_PROTOCOL · TOOLS
+docs/                   CONFIGURATION · OSC_COMMAND_PROTOCOL · OSC_OUT_PROTOCOL · TUIO2_PROTOCOL ·
+                        TOOLS
 examples/               SuperCollider / PureData / vvvv clients for the OSC and TUIO streams
 ```
 
-(The full development repository additionally carries the pytest suite and archived design
-documents; this distribution is the running system plus everything needed to reproduce the
-paper's measurements.)
+(The development repository additionally carries archived design documents and research
+tooling; this repository is the running system, its test suite, and everything needed to
+reproduce the paper's measurements.)
 
 The OSC formats are [`docs/OSC_COMMAND_PROTOCOL.txt`](docs/OSC_COMMAND_PROTOCOL.txt) (control in) and
 [`docs/OSC_OUT_PROTOCOL.txt`](docs/OSC_OUT_PROTOCOL.txt) (the tracker's own data out); the

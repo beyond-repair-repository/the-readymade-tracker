@@ -7,15 +7,18 @@ body wears **the photograph of its own object**: a sprite cut from the live
 MJPEG stream at the moment it settled. Drop a paper crumb and watch it bounce
 as itself.
 
+> The demo clip `physics.mp4` is not in the repository yet. Until it is, use a live camera or a
+> clip from `tests/videos/` (run as in the main README, without `--no-preprocess`).
+
 ## Install
 
 - **vvvv gamma** (tested with 2025.7): <https://visualprogramming.net/>
-- Unzip `VL.AetherPhysics.zip` (the local Aether.Physics2D wrapper) and fix the
-  document dependency path in `readymade-demo_2.vl` if yours differs.
+- Get `VL.AetherPhysics` (the Aether.Physics2D wrapper) from
+  <https://github.com/elektromeier/VL.AetherPhysics> and fix the document dependency
+  path in `readymade-demo_2.vl` if yours differs. The zip is not bundled here.
 - The C# project (`csharp/RmtWorld/`) builds on first patch open; its
   `SkiaSharp` package version **must match gamma's own** (2.88.8 for
   gamma 2025.7) or the image pins won't connect.
-- needs 'VL.AetherPhysics' <https://github.com/elektromeier/VL.AetherPhysics>
 
 ## Run
 
