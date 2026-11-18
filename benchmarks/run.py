@@ -6,8 +6,8 @@
 Then: `venv/bin/python benchmarks/analyze.py` turns what this wrote into the tables.
 
 WHAT RUNS WHERE
-  EVERY MACHINE — two passes of the SAME raw recording (tests/videos/20260714-164508_raw.mp4,
-  1920x1080, the original camera bytes, never re-encoded):
+  EVERY MACHINE — two passes of the SAME recording (tests/videos/20260714-164508_table.mp4,
+  1920x1080, the camera frame with everything outside the table masked):
 
     PERFORMANCE   benchmark.conf — the FULL preprocess chain as deployed (flip, crop, lens
                   undistort, flatfield; calibration committed under benchmarks/calib/), paced
@@ -64,7 +64,7 @@ LOGS = REPO / "logs"
 RUNS = BENCH_DIR / "runs"                # one folder per machine, holding that machine's logs
 VIDEOS = REPO / "tests" / "videos"
 
-RAW = "20260714-164508_raw"              # the recording: 1920x1080, original bytes
+RAW = "20260714-164508_table"            # the recording: 1920x1080, table only (rest masked)
 GT_LABEL = "20260714-164508"             # the same file through the annotated view -> its .MOT
 RAW_FRAMES = 2289                        # 9 objects, 38 onsets
 GT_CLIPS = [("hover1", 425),             # 8 objects, nothing put down or moved: the usual case
@@ -159,7 +159,7 @@ def run_clip(label: str, src: str, frames: int, conf: Path, out: Path, *,
 
 
 def main() -> int:
-    ap = argparse.ArgumentParser(description="One raw clip for performance; ground truth for correctness.")
+    ap = argparse.ArgumentParser(description="One clip for performance; ground truth for correctness.")
     ap.add_argument("--name", default=None,
                     help="what to call this machine in every table (MBA_M1, LabPC_win11, Pi5). "
                          "Default: the hostname, which a paper reader rarely recognises")

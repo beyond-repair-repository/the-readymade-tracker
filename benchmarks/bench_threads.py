@@ -72,7 +72,7 @@ VIDEOS = REPO / "tests" / "videos"
 # The RAW recording through benchmark.conf - the same workload as the performance pass, so
 # the sweep answers the question the benchmark actually asks. (hands2 was the old default;
 # it is 1024x1024 already, and benchmark.conf now crops at (460,20) - out of bounds for it.)
-DEFAULT_CLIP, DEFAULT_FRAMES = "20260714-164508_raw", 600
+DEFAULT_CLIP, DEFAULT_FRAMES = "20260714-164508_table", 600
 
 
 def groups_ms(n: int, clip: str, frames: int, conf: Path = None) -> dict:

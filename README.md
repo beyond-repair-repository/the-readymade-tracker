@@ -61,7 +61,7 @@ features of the selected object.
 ## Benchmarks
 
 The distribution carries the benchmark of the paper *Readymade Tangible Interaction: A
-Framework for Exploring Everyday Objects As Tangibles*: one raw 1920×1080 recording is both the
+Framework for Exploring Everyday Objects As Tangibles*: one 1920×1080 recording is both the
 performance workload (the full preprocess chain, paced at real time, with a real OSC/TUIO
 client receiving both output streams) and the correctness check (scored against a hand-made
 MOT ground truth). Two commands per machine:

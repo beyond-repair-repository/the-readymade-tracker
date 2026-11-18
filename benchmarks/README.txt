@@ -1,9 +1,11 @@
 HOW TO BENCHMARK, ON EACH OF THE THREE MACHINES
 ===============================================
 
-One raw recording is both the performance workload and the correctness check:
+One recording is both the performance workload and the correctness check:
 
-    tests/videos/20260714-164508_raw.mp4    1920x1080, the original camera bytes
+    tests/videos/20260714-164508_table.mp4  1920x1080, the full camera frame with everything
+                          outside the table blacked out (the preprocess crop reads
+                          only the table, so the workload is unchanged)
     benchmark.conf        PERFORMANCE - the full preprocess chain as deployed
                           (crop, lens undistort, flatfield; calibration in benchmarks/calib/)
     benchmark_gt.conf     VALIDATION - the annotated view (plain crop, no undistort),
@@ -54,6 +56,11 @@ performance row is void. Known tolerance: the LAST DIGIT of idf1 (and mota, in t
 varies with the OpenCV build's SIMD dispatch, not the OS - measured 0.9723 (M1 macOS,
 Windows x86) and 0.9725 (Pi 5 Linux); onsets, switches and settle are identical
 everywhere, and every value in that range passes.
+
+Note on the recording: the figures above were measured on the unmasked camera recording. The
+published file is the same recording with the area outside the table blacked out and encoded
+once more (MPEG-4, as before); the tracker reads only the table, and on it this file scores
+idf1 0.9724, mota 0.9463, 0 switches, settle 100.0% (Linux x86, OpenCV 5.0.0).
 
 Dropped frames are NOT a failure - they are the honest "did not keep up" signal, and they
 appear in summary.csv as their own column.
